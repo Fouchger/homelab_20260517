@@ -24,6 +24,7 @@ vars:
   SCRIPT_LIB_DIR: '{{.SCRIPTS_DIR}}/lib'
   SERVICES_DIR: services
   PROXMOX_HELPER_SCRIPTS_DIR: '{{.SERVICES_DIR}}/proxmox_helper_scripts'
+  PROXMOX_COMMUNITY_LXC_CONFIG_FILE: config/proxmox-community-lxc.yml
 
   # Secrets and backup paths
   SECRETS_DIR: '{{.STATE_DIR}}/secrets'

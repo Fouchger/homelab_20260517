@@ -1,0 +1,44 @@
+# ==============================================================================
+# File: config/proxmox-community-lxc.yml
+# Purpose:
+#   Declarative Proxmox community-script LXC definitions.
+# Notes:
+#   - This file is safe to commit only when it contains no secrets.
+#   - Values under each instance are passed to the selected community script as
+#     environment variables.
+#   - Use var_ssh_authorized_key: auto to read the first usable public key from
+#     /root/.ssh on the Proxmox host.
+# ==============================================================================
+
+technitiumdns.sh:
+  dns01:
+    var_ctid: "21001"
+    var_hostname: "dns01"
+    var_brg: "vmbr0"
+    var_net: "192.168.30.2/24"
+    var_gateway: "192.168.30.1"
+    var_vlan: "30"
+    var_mtu: "1500"
+    var_ssh: "yes"
+    var_mac: "64:16:7F:90:69:01"
+    var_protection: "yes"
+    var_timezone: "Pacific/Auckland"
+    var_container_storage: "local-lvm"
+    var_template_storage: "local"
+    var_ssh_authorized_key: auto
+
+  dns02:
+    var_ctid: "21002"
+    var_hostname: "dns02"
+    var_brg: "vmbr0"
+    var_net: "192.168.30.3/24"
+    var_gateway: "192.168.30.1"
+    var_vlan: "30"
+    var_mtu: "1500"
+    var_ssh: "yes"
+    var_mac: "64:16:7F:90:69:02"
+    var_protection: "yes"
+    var_timezone: "Pacific/Auckland"
+    var_container_storage: "local-lvm"
+    var_template_storage: "local"
+    var_ssh_authorized_key: auto

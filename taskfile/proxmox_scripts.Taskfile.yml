@@ -130,3 +130,65 @@ tasks:
         fi
 
  
+
+  lxc:ensure:
+    desc: Ensure Proxmox community-script LXC containers exist from the shared config.
+    deps:
+      - :ssh:key:ensure
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Ensure Proxmox community-script LXC containers" "PEACH"
+      - |
+        set -euo pipefail
+
+        script_path="{{.ROOT_DIR}}/{{.PROXMOX_HELPER_SCRIPTS_DIR}}/proxmox-ensure-community-lxc.sh"
+        config_path="{{.ROOT_DIR}}/{{.PROXMOX_COMMUNITY_LXC_CONFIG_FILE}}"
+
+        if [[ ! -x "$script_path" ]]; then
+          echo "ERROR: Missing or non-executable script: ${script_path}" >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$config_path" ]]; then
+          echo "ERROR: Missing LXC config file: ${config_path}" >&2
+          exit 1
+        fi
+
+        CONFIG_ENV_FILE="{{.CONFIG_ENV_FILE}}" \
+          LXC_CONFIG_FILE="$config_path" \
+          "$script_path"
+
+  technitiumdns:ensure:
+    desc: Ensure the Technitium DNS LXC containers exist on the Proxmox host.
+    deps:
+      - :ssh:key:ensure
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Ensure Technitium DNS LXC containers" "PEACH"
+      - |
+        set -euo pipefail
+
+        script_path="{{.ROOT_DIR}}/{{.PROXMOX_HELPER_SCRIPTS_DIR}}/proxmox-ensure-community-lxc.sh"
+        config_path="{{.ROOT_DIR}}/{{.PROXMOX_COMMUNITY_LXC_CONFIG_FILE}}"
+
+        if [[ ! -x "$script_path" ]]; then
+          echo "ERROR: Missing or non-executable script: ${script_path}" >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$config_path" ]]; then
+          echo "ERROR: Missing LXC config file: ${config_path}" >&2
+          exit 1
+        fi
+
+        CONFIG_ENV_FILE="{{.CONFIG_ENV_FILE}}" \
+          LXC_CONFIG_FILE="$config_path" \
+          "$script_path" "technitiumdns.sh"
