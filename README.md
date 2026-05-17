@@ -101,3 +101,21 @@ The following are expected to be local runtime artefacts and are ignored by Git:
 ## Licence
 
 This repository is licensed under GPL-3.0. See `LICENSE`.
+
+## Quick start
+
+Run the installer:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Fouchger/homelab_20260501/main/install.sh)"
+```
+
+Then enter the repo and view the safe task list:
+
+```bash
+cd ~/app/homelab_20260501
+# or, for dev installs:
+cd ~/Github/homelab_20260501
+
+task help
+```
