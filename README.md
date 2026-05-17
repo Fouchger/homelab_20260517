@@ -107,7 +107,7 @@ This repository is licensed under GPL-3.0. See `LICENSE`.
 Run the installer:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Fouchger/homelab_20260501/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Fouchger/homelab_20260517/main/install.sh)"
 ```
 
 Then enter the repo and view the safe task list:
