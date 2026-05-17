@@ -1,0 +1,54 @@
+# ==============================================================================
+# File: .gitignore
+# Purpose:
+#   Ignore local runtime state, secrets, build outputs and editor files.
+# ==============================================================================
+
+# Local environment and secrets
+.env
+*.env
+.sops.yaml
+
+# Generated state
+state/
+state1/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+*.auto.tfvars
+.terraform.lock.hcl
+
+# Ansible
+*.retry
+
+# Packer
+packer_cache/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Binaries and logs
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
+*.out
+coverage.*
+
+# Patch leftovers
+*.orig
+*.rej
+*.patch
+*.diff
+
+# Python cache
+__pycache__/
+*.pyc

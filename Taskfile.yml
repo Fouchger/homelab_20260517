@@ -1,0 +1,330 @@
+# ==============================================================================
+# File: Taskfile.yml
+# Purpose:
+#   Root Task entry point and control plane for the homelab repository.
+# Notes:
+#   - install.sh downloads or updates the repository only.
+#   - Taskfile.yml is the operational entry point after installation.
+#   - Shared variables are defined once here and reused by child Taskfiles.
+# ==============================================================================
+
+version: '3'
+
+silent: true
+
+dotenv:
+  - state/config/.env
+
+vars:
+  # Repository paths
+  STATE_DIR: state
+  CONFIG_DIR: '{{.STATE_DIR}}/config'
+  CONFIG_ENV_FILE: '{{.CONFIG_DIR}}/.env'
+  SCRIPTS_DIR: scripts
+  SCRIPT_LIB_DIR: '{{.SCRIPTS_DIR}}/lib'
+  SERVICES_DIR: services
+  PROXMOX_HELPER_SCRIPTS_DIR: '{{.SERVICES_DIR}}/proxmox_helper_scripts'
+
+  # Secrets and backup paths
+  SECRETS_DIR: '{{.STATE_DIR}}/secrets'
+  PASSWORDS_DIR: '{{.SECRETS_DIR}}/passwords'
+  SOPS_DIR: '{{.SECRETS_DIR}}/sops'
+  BACKUP_DIR: '{{.STATE_DIR}}/backups'
+  OFFLINE_BACKUP_DIR: '{{.BACKUP_DIR}}/offline'
+
+  # Password and SOPS files
+  PASSWORDS_ENCRYPTED_FILE: '{{.PASSWORDS_DIR}}/passwords.enc.env'
+  PASSWORDS_RUNTIME_FILE: '{{.PASSWORDS_DIR}}/passwords.runtime.env'
+  PASSWORD_AUDIT_REPORT: '{{.PASSWORDS_DIR}}/password-audit-report.txt'
+  SOPS_AGE_KEY_FILE: '{{.SOPS_DIR}}/keys.txt'
+  SOPS_AGE_RECIPIENTS_FILE: '{{.SOPS_DIR}}/recipients.txt'
+  SOPS_CONFIG_FILE: .sops.yaml
+  INSTALL_STATE_FILE: '{{.SOPS_DIR}}/install-state.env'
+
+  # Ansible inventory paths
+  ANSIBLE_DIR: '{{.STATE_DIR}}/ansible'
+  ANSIBLE_INVENTORY_FILE: '{{.ANSIBLE_DIR}}/inventory.yml'
+  ANSIBLE_DISCOVERY_REPORT: '{{.ANSIBLE_DIR}}/discovery-report.txt'
+
+  # State marker paths
+  STATE_MARKERS_DIR: '{{.STATE_DIR}}/markers'
+  HOMELAB_SETUP_MARKER: '{{.STATE_MARKERS_DIR}}/homelab-setup.done'
+
+  # SSH configuration
+  SSH_KEY_FILE: '${HOME}/.ssh/homelab_ed25519'
+  SSH_KEY_COMMENT: 'homelab_20260501'
+  SSH_KEY_BACKUP_DIR: '{{.BACKUP_DIR}}/ssh'
+  SSH_KEY_FILE_KEY: HOMELAB_SSH_KEY_FILE
+  SSH_KEY_COMMENT_KEY: HOMELAB_SSH_KEY_COMMENT
+
+  # Shared script paths
+  BANNER_SCRIPT: '{{.SCRIPTS_DIR}}/banner/banner.sh'
+  ENSURE_EXECUTABLE_SCRIPTS: '{{.SCRIPT_LIB_DIR}}/ensure-executable-scripts.sh'
+  TERMINAL_COLOURS_SCRIPT: '{{.SCRIPT_LIB_DIR}}/terminal-colours.sh'
+  HEALTH_CHECK_SCRIPT: '{{.SCRIPT_LIB_DIR}}/health-check.sh'
+  INVENTORY_MANAGER_SCRIPT: '{{.SCRIPT_LIB_DIR}}/inventory-manager.py'
+  NETWORK_DISCOVERY_SCRIPT: '{{.SCRIPT_LIB_DIR}}/network-discovery.py'
+  CODE_SERVER_STATIC_SCRIPT: '{{.PROXMOX_HELPER_SCRIPTS_DIR}}/coder-code-server.sh'
+
+  # Git and GitHub configuration keys
+  GITHUB_USERNAME_KEY: GITHUB_USERNAME
+  GITHUB_TOKEN_KEY: GITHUB_TOKEN
+  GIT_USER_NAME_KEY: GIT_USER_NAME
+  GIT_USER_EMAIL_KEY: GIT_USER_EMAIL
+
+  # Proxmox configuration keys
+  PROXMOX_SSH_HOST_KEY: PROXMOX_SSH_HOST
+  PROXMOX_SSH_PORT_KEY: PROXMOX_SSH_PORT
+  PROXMOX_SSH_USER_KEY: PROXMOX_SSH_USER
+  PROXMOX_HOST_IP_KEY: PROXMOX_HOST_IP
+  PROXMOX_API_URL_KEY: PROXMOX_API_URL
+
+includes:
+  passwords: ./taskfile/passwords.Taskfile.yml
+  github: ./taskfile/github.Taskfile.yml
+  env_create: ./taskfile/env_create.Taskfile.yml
+  ssh: ./taskfile/ssh.Taskfile.yml
+  apps: ./taskfile/apps.Taskfile.yml
+  health: ./taskfile/health.Taskfile.yml
+  proxmox: ./taskfile/proxmox.Taskfile.yml
+  proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
+
+tasks:
+  default:
+    desc: Show available homelab tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available homelab tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  help:
+    desc: Show customer-facing tasks a user can run and what each task does
+    cmds:
+      - |
+        set -euo pipefail
+
+        cat <<'EOHELP'
+        Homelab task help
+
+        Run tasks from the repository root. Internal helper tasks are intentionally
+        excluded. High-risk customer-facing tasks are listed separately so they are
+        visible but not mistaken for routine operations.
+
+        --------------------------------------------------------------
+        General
+        --------------------------------------------------------------
+        task help                       -> Show this task help.
+        task tasklist                   -> Show all registered Taskfile tasks from the root Taskfile.
+
+        --------------------------------------------------------------
+        Homelab setup
+        --------------------------------------------------------------
+        task homelab:setup              -> Run the standard homelab setup flow, including required script
+                                            permissions, password setup, GitHub setup, tooling setup, inventory
+                                            setup, Proxmox API bootstrap, and health reporting.
+
+        --------------------------------------------------------------
+        Password and secrets setup
+        --------------------------------------------------------------
+        task passwords:help             -> Show password and SOPS task help.
+        task passwords:setup            -> Install required tools, configure SOPS and age, generate keys,
+                                            create an offline backup, encrypt the password file, and clean up
+                                            runtime plaintext files.
+        task passwords:install          -> Install SOPS, age, and required packages. Existing packages are
+                                            recorded so later cleanup does not remove shared prerequisites.
+        task passwords:configure        -> Validate SOPS and age, create required folders, and select the
+                                            password editor from nano, vi, or vim. The editor is installed if
+                                            missing.
+        task passwords:keys:generate    -> Generate the age key and SOPS recipient required to encrypt the
+                                            password file. Existing keys are preserved.
+        task passwords:backup:offline   -> Create a local offline-backup bundle for the SOPS config and age
+                                            key material. Move the bundle to offline storage after creation.
+        task passwords:encrypt          -> Create the initial encrypted password file, or leave the existing
+                                            encrypted file unchanged if it already exists.
+
+        --------------------------------------------------------------
+        Password and secrets operations
+        --------------------------------------------------------------
+        task passwords:edit             -> Edit the encrypted password file through SOPS using the selected
+                                            editor. Plaintext runtime files are removed after editing.
+        task passwords:audit            -> Generate a password audit report without printing secret values.
+                                            Checks include blank values, placeholders, duplicate keys, and
+                                            short values.
+        task passwords:cleanup          -> Remove runtime plaintext password files and temporary decrypted
+                                            files. Safe to run after any password task.
+
+        --------------------------------------------------------------
+        Application and automation tooling
+        --------------------------------------------------------------
+        task apps:help                  -> Show application and automation tooling task help.
+        task apps:setup                 -> Install Python, pipx, Ansible, Terraform, and Packer tooling.
+        task apps:prerequisites         -> Install common Debian/Ubuntu prerequisites used by app installers.
+        task apps:python                -> Install Python 3, pip, venv, setuptools, wheel, and pipx.
+        task apps:ansible               -> Install Ansible with pipx.
+        task apps:hashicorp:repo        -> Configure the official HashiCorp apt repository.
+        task apps:terraform             -> Install Terraform from the official HashiCorp apt repository.
+        task apps:packer                -> Install Packer from the official HashiCorp apt repository.
+        task apps:audit                 -> Show installed application and automation tooling status.
+
+        --------------------------------------------------------------
+        Health and capability reporting
+        --------------------------------------------------------------
+        task health:check               -> Run a consolidated operational health check across core areas.
+        task health:capabilities        -> Show what the control plane can currently do.
+        task health:setup-state         -> Show first-run and repeat-run state markers.
+        task health:all                 -> Run existing detailed audits across core task areas.
+
+        --------------------------------------------------------------
+        Git and GitHub operations
+        --------------------------------------------------------------
+        task github:help                -> Show Git and GitHub task help.
+        task github:setup               -> Install Git and GitHub CLI, configure Git identity, authenticate
+                                            GitHub CLI, and report status.
+        task github:install             -> Install Git and GitHub CLI if they are missing.
+        task github:configure           -> Configure GitHub username and Git identity, asking for missing values.
+        task github:auth                -> Authenticate GitHub CLI with a token if not already logged in.
+        task github:audit               -> Show Git, gh, identity, token-source, and authentication status
+                                            without printing secrets.
+
+        --------------------------------------------------------------
+        Inventory operations
+        --------------------------------------------------------------
+        task env_create:help            -> Show environment and inventory task help.
+        task env_create:inventory:init  -> Create state/ansible/inventory.yml when missing with a minimum local
+                                            host definition.
+        task env_create:inventory:add   -> Interactively add or update a grouped server in the SSH inventory,
+                                            including SSH IP/DNS target, VM/LXC ID, MAC address, SSH user,
+                                            password variable reference, and Python interpreter mode.
+        task env_create:inventory:discover -> Scan a CIDR with nmap and report discovered hosts not yet in inventory.
+        task env_create:inventory:add:server -> Non-interactively add or update a server in the SSH inventory
+                                            using task variables for automation and other tasks.
+
+        --------------------------------------------------------------
+        SSH operations
+        --------------------------------------------------------------
+        task ssh:help                   -> Show SSH task help.
+        task ssh:setup                  -> Install SSH tooling, initialise the SSH inventory if missing,
+                                            create the homelab Ed25519 key if missing, copy it to inventory
+                                            hosts where needed, and report status.
+        task ssh:install                -> Install ssh and ssh-copy-id if they are missing.
+        task ssh:key:ensure             -> Create the homelab Ed25519 SSH key if it does not exist.
+        task ssh:key:recycle            -> Back up the current homelab SSH key and create a replacement.
+        task ssh:copy-id                -> Copy the homelab public key to inventory hosts when needed.
+        task ssh:wait-ready             -> Wait until all non-local inventory hosts accept SSH TCP connections.
+        task ssh:bootstrap              -> Wait for SSH, copy keys, normalise auth, and verify access.
+        task ssh:verify                 -> Fail unless every non-local inventory host accepts key-based SSH.
+        task ssh:normalise-auth         -> Switch inventory hosts to key-based steady-state SSH authentication
+                                            when SSH key login works.
+        task ssh:audit                  -> Show key and per-server passwordless SSH status.
+
+        --------------------------------------------------------------
+        Proxmox API bootstrap
+        --------------------------------------------------------------
+        task proxmox:help               -> Show Proxmox automation task help.
+        task proxmox:tools:check        -> Validate local tooling required for Proxmox API bootstrap.
+        task proxmox:host:configure     -> Prompt once for Proxmox host metadata, then update
+                                            state/config/.env and state/ansible/inventory.yml.
+        task proxmox:api:ensure         -> Create or reconcile the Proxmox automation role, user, root ACL,
+                                            and API token. Reuses existing valid local and remote token state.
+        task proxmox:api:recycle        -> Force-remove and recreate the Proxmox automation API token,
+                                            then update encrypted local state.
+        task proxmox:api:report         -> Show Proxmox API bootstrap status without printing secrets.
+
+        --------------------------------------------------------------
+        Proxmox helper scripts
+        --------------------------------------------------------------
+        task proxmox_scripts:code-server:install -> Install code-server using the reviewed static repo script.
+        task proxmox_scripts:community:list      -> List reusable Proxmox Community Script wrappers supported
+                                            by this repo.
+        task proxmox_scripts:community:init      -> Create a reusable Proxmox Community Script config if it
+                                            does not exist.
+        task proxmox_scripts:community:configure -> Interactively configure reusable Advanced Install variables
+                                            for a Proxmox Community Script.
+        task proxmox_scripts:community:plan      -> Show planned Proxmox Community Script LXC creation runs
+                                            without creating anything.
+        task proxmox_scripts:community:run       -> Create LXCs through Proxmox Community Scripts and update
+                                            inventory after successful creation.
+        task proxmox_scripts:community:audit     -> Show Proxmox Community Script wrapper config status.
+
+
+        --------------------------------------------------------------
+        Advanced and high-risk operations
+        --------------------------------------------------------------
+        task passwords:decrypt          -> Decrypt the password file to a temporary runtime file.
+        task passwords:display          -> Display decrypted passwords in the terminal.
+        task passwords:keys:rotate      -> Rotate age keys and re-encrypt the password file.
+        task passwords:destroy          -> Destroy passwords and uninstall SOPS and age where safely owned by
+                                            this task. Treat as destructive.
+        EOHELP
+
+  homelab:setup:
+    desc: Run the homelab setup through bootstrap, configure, and validation phases.
+    cmds:
+      - task: homelab:bootstrap
+      - task: homelab:configure
+      - task: homelab:validate
+
+  homelab:bootstrap:
+    desc: Prepare local control-plane tooling, encrypted secrets, GitHub access, and the SSH key only.
+    cmds:
+      - |
+        set -euo pipefail
+
+        clear
+        bash "{{.BANNER_SCRIPT}}"
+        bash "{{.ENSURE_EXECUTABLE_SCRIPTS}}"
+      - task: proxmox_scripts:code-server:install
+      - task: passwords:setup
+      - task: github:setup
+      - task: apps:setup
+      - task: env_create:inventory:init
+      - task: ssh:install
+      - task: ssh:key:ensure
+
+  homelab:configure:
+    desc: Capture Proxmox host configuration, bootstrap SSH access, and prepare the Proxmox API automation account.
+    cmds:
+      - task: proxmox:api:ensure
+
+  homelab:validate:
+    desc: Run final health checks, then write the setup marker.
+    cmds:
+      - |
+        set -euo pipefail
+
+        mkdir -p "{{.STATE_MARKERS_DIR}}"
+        printf 'completed_at=%s\n' "$(date -Iseconds)" > "{{.HOMELAB_SETUP_MARKER}}"
+        chmod 600 "{{.HOMELAB_SETUP_MARKER}}"
+      - task: health:check
+      - task: health:capabilities
+      - task: health:setup-state
+      - |
+        set -euo pipefail
+
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Homelab setup is complete. Enjoy!" "GREEN"
+
+  ci:
+    desc: Run safe static validation checks for shell, Python, and YAML files.
+    cmds:
+      - |
+        set -euo pipefail
+
+        if command -v shellcheck >/dev/null 2>&1; then
+          find . -type f -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r shellcheck
+        else
+          echo "WARNING: shellcheck is not installed; skipping shell lint." >&2
+        fi
+
+        python3 -m compileall -q scripts
+
+
+        if command -v yamllint >/dev/null 2>&1; then
+          yamllint .
+        else
+          echo "WARNING: yamllint is not installed; skipping YAML lint." >&2
+        fi

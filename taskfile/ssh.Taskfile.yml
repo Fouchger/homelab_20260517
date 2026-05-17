@@ -1,0 +1,736 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/ssh.Taskfile.yml
+# Purpose:
+#   Install SSH client tooling, manage a homelab Ed25519 key, copy the public key
+#   to inventory hosts, and report key status per server.
+# Notes:
+#   - This Taskfile must never create or recreate state/config/.env or
+#     state/secrets/passwords/passwords.enc.env.
+#   - state/config/.env is created by install.sh only. This file may update it
+#     only when it already exists.
+#   - state/secrets/passwords/passwords.enc.env is created by passwords.Taskfile.yml
+#     only. This file currently reads no secrets and does not write that file.
+#   - state/ansible/inventory.yml is created by env_create.Taskfile.yml only.
+# =============================================================================
+
+version: '3'
+
+vars:
+  SSH_READY_WAIT_SECONDS: '{{.SSH_READY_WAIT_SECONDS | default "240"}}'
+  SSH_COPY_ID_ATTEMPTS: '{{.SSH_COPY_ID_ATTEMPTS | default "12"}}'
+  SSH_COPY_ID_RETRY_SECONDS: '{{.SSH_COPY_ID_RETRY_SECONDS | default "10"}}'
+
+tasks:
+  default:
+    desc: Show available SSH tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available SSH tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  help:
+    desc: Show safe SSH tasks
+    cmds:
+      - |
+        set -euo pipefail
+
+        cat <<'EOHELP'
+        Safe SSH task help
+
+        Setup
+          task ssh:setup
+            Install SSH client tooling, create inventory if missing, create an
+            Ed25519 SSH key if missing, copy it to inventory hosts where needed,
+            and run an audit.
+
+          task ssh:install
+            Install ssh and ssh-copy-id when missing.
+
+          task ssh:key:ensure
+            Create the homelab Ed25519 key when missing.
+
+          task ssh:key:recycle
+            Back up the current homelab key and create a replacement Ed25519 key.
+            Existing remote authorised_keys entries are not removed.
+
+          task ssh:copy-id
+            Copy the homelab public key to every non-local inventory host where
+            passwordless SSH is not already working. Uses saved SOPS passwords
+            when available; otherwise falls back to interactive ssh-copy-id.
+
+          task ssh:bootstrap
+            Wait for SSH, copy keys with retries, normalise inventory auth, and
+            verify key login before continuing.
+
+          task ssh:verify
+            Fail unless every non-local inventory host accepts key-based SSH.
+
+          task ssh:normalise-auth
+            When key login works, update the inventory to use the homelab SSH
+            key for steady state and remove runtime ansible_password.
+
+        Audit
+          task ssh:audit
+            Report SSH key and per-server passwordless SSH status.
+        EOHELP
+
+  setup:
+    desc: Install SSH tooling, ensure inventory and key, copy key to servers, and audit status.
+    cmds:
+      - task: install
+      - task: :env_create:inventory:init
+      - task: key:ensure
+      - task: bootstrap
+      - task: audit
+
+  install:
+    desc: Install ssh and ssh-copy-id if they are missing.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install ssh and ssh-copy-id if they are missing." "PEACH"
+      - |
+        set -euo pipefail
+
+        require_sudo() {
+          if [[ "${EUID}" -eq 0 ]]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
+        }
+
+        require_sudo
+
+        if ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-copy-id >/dev/null 2>&1 || ! command -v sshpass >/dev/null 2>&1; then
+          $SUDO apt-get update -y
+          $SUDO apt-get install -y openssh-client sshpass
+        fi
+
+        if ! command -v ssh >/dev/null 2>&1; then
+          echo "ERROR: ssh is still missing after installing openssh-client." >&2
+          exit 1
+        fi
+
+        if ! command -v ssh-copy-id >/dev/null 2>&1; then
+          echo "ERROR: ssh-copy-id is still missing after installing openssh-client." >&2
+          exit 1
+        fi
+
+        if ! command -v sshpass >/dev/null 2>&1; then
+          echo "ERROR: sshpass is still missing after installing sshpass." >&2
+          exit 1
+        fi
+
+        echo "Installed tool versions:"
+        ssh -V 2>&1
+        ssh-copy-id -h 2>&1 | head -n 1 || true
+        sshpass -V 2>&1 | head -n 1 || true
+
+  key:ensure:
+    desc: Create the homelab Ed25519 SSH key if it does not exist.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Create the homelab Ed25519 SSH key if it does not exist." "PEACH"
+      - |
+        set -euo pipefail
+
+        config_file="{{.CONFIG_ENV_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+        key_comment="${HOMELAB_SSH_KEY_COMMENT:-{{.SSH_KEY_COMMENT}}}"
+
+        if [[ ! -f "$config_file" ]]; then
+          echo "ERROR: Missing config file: ${config_file}" >&2
+          echo "Run ./install.sh first. Only install.sh may create this file." >&2
+          exit 1
+        fi
+
+        mkdir -p "$(dirname "$key_file")"
+        chmod 700 "$(dirname "$key_file")"
+
+        if [[ -f "$key_file" && -f "${key_file}.pub" ]]; then
+          echo "SSH key already exists: ${key_file}"
+        else
+          if [[ -e "$key_file" || -e "${key_file}.pub" ]]; then
+            echo "ERROR: Partial SSH key found. Run task ssh:key:recycle or repair these files manually:" >&2
+            echo "  ${key_file}" >&2
+            echo "  ${key_file}.pub" >&2
+            exit 1
+          fi
+
+          ssh-keygen -t ed25519 -a 100 -f "$key_file" -C "$key_comment" -N ""
+          chmod 600 "$key_file"
+          chmod 644 "${key_file}.pub"
+          echo "Created SSH key: ${key_file}"
+        fi
+
+        append_config_if_missing() {
+          local key="$1"
+          local value="$2"
+          if grep -Eq "^${key}=" "$config_file"; then
+            return 0
+          fi
+          printf '%s="%s"\n' "$key" "$value" >> "$config_file"
+          chmod 600 "$config_file"
+        }
+
+        append_config_if_missing "{{.SSH_KEY_FILE_KEY}}" "$key_file"
+        append_config_if_missing "{{.SSH_KEY_COMMENT_KEY}}" "$key_comment"
+
+  key:recycle:
+    desc: Back up the current homelab SSH key and create a replacement Ed25519 key.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Recycle the homelab Ed25519 SSH key." "PEACH"
+      - |
+        set -euo pipefail
+
+        config_file="{{.CONFIG_ENV_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+        key_comment="${HOMELAB_SSH_KEY_COMMENT:-{{.SSH_KEY_COMMENT}}}"
+        backup_dir="{{.SSH_KEY_BACKUP_DIR}}/$(date +%Y%m%d-%H%M%S)"
+
+        if [[ ! -f "$config_file" ]]; then
+          echo "ERROR: Missing config file: ${config_file}" >&2
+          echo "Run ./install.sh first. Only install.sh may create this file." >&2
+          exit 1
+        fi
+
+        mkdir -p "$backup_dir" "$(dirname "$key_file")"
+        chmod 700 "{{.SSH_KEY_BACKUP_DIR}}" "$backup_dir" "$(dirname "$key_file")"
+
+        if [[ -f "$key_file" ]]; then
+          cp -p "$key_file" "$backup_dir/$(basename "$key_file")"
+        fi
+
+        if [[ -f "${key_file}.pub" ]]; then
+          cp -p "${key_file}.pub" "$backup_dir/$(basename "${key_file}.pub")"
+        fi
+
+        rm -f "$key_file" "${key_file}.pub"
+        ssh-keygen -t ed25519 -a 100 -f "$key_file" -C "$key_comment" -N ""
+        chmod 600 "$key_file"
+        chmod 644 "${key_file}.pub"
+
+        echo "Created replacement SSH key: ${key_file}"
+        echo "Previous key material backed up under: ${backup_dir}"
+        echo "Run task ssh:copy-id to install the new public key on remote servers."
+
+  copy-id:
+    desc: Copy the homelab public key to every non-local inventory server if it is not already copied.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Copy SSH public key to inventory servers where needed." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        password_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+        age_key_file="{{.SOPS_AGE_KEY_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+        public_key_file="${key_file}.pub"
+        max_attempts="{{.SSH_COPY_ID_ATTEMPTS}}"
+        retry_seconds="{{.SSH_COPY_ID_RETRY_SECONDS}}"
+        password_runtime_file=""
+
+        cleanup_password_runtime_file() {
+          if [[ -n "${password_runtime_file}" && -f "${password_runtime_file}" ]]; then
+            rm -f "${password_runtime_file}"
+          fi
+        }
+        trap cleanup_password_runtime_file EXIT
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo "ERROR: Missing inventory file: ${inventory_file}" >&2
+          echo "Run: task env_create:inventory:init" >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$key_file" || ! -f "$public_key_file" ]]; then
+          echo "ERROR: Missing SSH key files. Run: task ssh:key:ensure" >&2
+          exit 1
+        fi
+
+        load_passwords_if_available() {
+          if [[ ! -f "$password_file" ]] || ! command -v sops >/dev/null 2>&1; then
+            return 0
+          fi
+          password_runtime_file="$(mktemp)"
+          chmod 600 "$password_runtime_file"
+          if [[ -f "$age_key_file" ]]; then
+            SOPS_AGE_KEY_FILE="$age_key_file" sops --decrypt --input-type dotenv --output-type dotenv "$password_file" > "$password_runtime_file" 2>/dev/null || true
+          else
+            sops --decrypt --input-type dotenv --output-type dotenv "$password_file" > "$password_runtime_file" 2>/dev/null || true
+          fi
+        }
+
+        read_password_value() {
+          local key="$1"
+          [[ -n "$key" ]] || return 0
+          [[ -n "$password_runtime_file" && -f "$password_runtime_file" ]] || return 0
+          grep -E "^${key}=" "$password_runtime_file" | tail -n 1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' || true
+        }
+
+        list_inventory_hosts() {
+          python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" list-ssh-hosts \
+            --inventory-file "$inventory_file"
+        }
+
+        key_auth_works() {
+          local target="$1"
+          local port="$2"
+          ssh \
+            -n \
+            -i "$key_file" \
+            -p "$port" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=5 \
+            -o StrictHostKeyChecking=accept-new \
+            "$target" true >/dev/null 2>&1
+        }
+
+        copy_key_to_host() {
+          local name="$1"
+          local target="$2"
+          local port="$3"
+          local password_var="$4"
+          local force_interactive="$5"
+          local password_value=""
+
+          password_value="$(read_password_value "$password_var")"
+
+          if [[ "$force_interactive" != "true" && -n "$password_value" ]] && command -v sshpass >/dev/null 2>&1; then
+            echo "${name}: copying public key to ${target} using saved password variable ${password_var}."
+            SSHPASS="$password_value" sshpass -e ssh-copy-id \
+              -f \
+              -i "$public_key_file" \
+              -p "$port" \
+              -o StrictHostKeyChecking=accept-new \
+              -o NumberOfPasswordPrompts=1 \
+              "$target" </dev/null >/dev/null
+          else
+            if [[ -n "$password_value" && "$force_interactive" == "true" ]]; then
+              echo "${name}: saved password did not work on the previous attempt. Falling back to interactive ssh-copy-id for ${target}."
+            else
+              echo "${name}: copying public key to ${target}. Enter the server password if prompted."
+            fi
+            ssh-copy-id \
+              -i "$public_key_file" \
+              -p "$port" \
+              -o StrictHostKeyChecking=accept-new \
+              "$target" </dev/tty
+          fi
+        }
+
+        load_passwords_if_available
+
+        inventory_hosts_file="$(mktemp)"
+        trap 'cleanup_password_runtime_file; rm -f "$inventory_hosts_file"' EXIT
+        list_inventory_hosts > "$inventory_hosts_file"
+        if [[ ! -s "$inventory_hosts_file" ]]; then
+          echo "No inventory hosts found."
+          exit 0
+        fi
+
+        attempt=1
+        while (( attempt <= max_attempts )); do
+          echo "SSH key bootstrap attempt ${attempt}/${max_attempts}"
+          pending=0
+          checked=0
+
+          while IFS='|' read -r name group host user connection port keyfile password_var; do
+            [[ -n "$name" ]] || continue
+
+            if [[ "$connection" == "local" || "$name" == "local" || "$host" == "127.0.0.1" || "$host" == "localhost" ]]; then
+              echo "${name}: local connection, no ssh-copy-id required."
+              continue
+            fi
+
+            if [[ -z "$host" ]]; then
+              echo "${name}: WARNING: missing ansible_host; cannot copy SSH key." >&2
+              pending=$((pending + 1))
+              continue
+            fi
+
+            target="$host"
+            if [[ -n "$user" ]]; then
+              target="${user}@${host}"
+            fi
+
+            checked=$((checked + 1))
+
+            if key_auth_works "$target" "$port"; then
+              echo "${name}: public key already works for ${target}."
+              continue
+            fi
+
+            force_interactive="false"
+            if (( attempt > 1 )); then
+              force_interactive="true"
+            fi
+
+            if copy_key_to_host "$name" "$target" "$port" "$password_var" "$force_interactive"; then
+              if key_auth_works "$target" "$port"; then
+                echo "${name}: public key copied and verified for ${target}."
+              else
+                echo "${name}: WARNING: ssh-copy-id completed, but key auth is not verified yet for ${target}." >&2
+                pending=$((pending + 1))
+              fi
+            else
+              echo "${name}: WARNING: unable to copy public key to ${target}. Will retry if attempts remain." >&2
+              pending=$((pending + 1))
+            fi
+          done < "$inventory_hosts_file"
+
+          if (( checked == 0 )); then
+            echo "No non-local SSH inventory hosts require ssh-copy-id."
+            exit 0
+          fi
+
+          if (( pending == 0 )); then
+            echo "SSH key bootstrap completed for all ${checked} non-local inventory host(s)."
+            exit 0
+          fi
+
+          if (( attempt >= max_attempts )); then
+            echo "ERROR: SSH key bootstrap did not complete for ${pending} host(s)." >&2
+            exit 1
+          fi
+
+          if (( attempt == 1 )); then
+            echo "${pending} host(s) still pending. Waiting ${retry_seconds} seconds before retry, then falling back to interactive ssh-copy-id for hosts that still need keys."
+          else
+            echo "${pending} host(s) still pending. Waiting ${retry_seconds} seconds before retry."
+          fi
+          sleep "$retry_seconds"
+          attempt=$((attempt + 1))
+        done
+
+
+  wait-ready:
+    desc: Wait until all non-local inventory hosts accept SSH TCP connections.
+    cmds:
+      - |
+        set -euo pipefail
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Wait for inventory servers to accept SSH connections." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        timeout_seconds="{{.SSH_READY_WAIT_SECONDS}}"
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo "ERROR: Missing inventory file: ${inventory_file}" >&2
+          exit 1
+        fi
+
+        declare -a inventory_hosts=()
+        mapfile -t inventory_hosts < <(python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" list-ssh-hosts --inventory-file "$inventory_file")
+        failures=0
+        checked=0
+
+        for inventory_line in "${inventory_hosts[@]}"; do
+          IFS='|' read -r name group host user connection port keyfile password_var <<< "$inventory_line"
+          [[ -n "$name" ]] || continue
+          if [[ "$connection" == "local" || "$name" == "local" || "$host" == "127.0.0.1" || "$host" == "localhost" ]]; then
+            echo "${name}: local connection, no SSH wait required."
+            continue
+          fi
+
+          checked=$((checked + 1))
+          deadline=$((SECONDS + timeout_seconds))
+          while true; do
+            if timeout 3 bash -c "</dev/tcp/${host}/${port}" >/dev/null 2>&1; then
+              echo "${name}: SSH is reachable at ${host}:${port}."
+              break
+            fi
+            if (( SECONDS >= deadline )); then
+              echo "ERROR: ${name}: SSH did not become reachable at ${host}:${port} within ${timeout_seconds} seconds." >&2
+              failures=$((failures + 1))
+              break
+            fi
+            sleep 5
+          done
+        done
+
+        if (( failures > 0 )); then
+          echo "ERROR: ${failures} non-local inventory host(s) did not become SSH reachable." >&2
+          exit 1
+        fi
+
+        echo "SSH reachability verified for ${checked} non-local inventory host(s)."
+
+
+  bootstrap:
+    desc: Wait for SSH, copy the homelab public key with retries, normalise auth, and verify key login.
+    cmds:
+      - task: wait-ready
+      - task: copy-id
+      - task: normalise-auth
+      - task: verify
+
+  verify:
+    desc: Fail unless every non-local inventory host accepts key-based SSH.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Verify key-based SSH access for inventory servers." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo "ERROR: Missing inventory file: ${inventory_file}" >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$key_file" ]]; then
+          echo "ERROR: Missing SSH key file: ${key_file}" >&2
+          exit 1
+        fi
+
+        failures=0
+        checked=0
+        declare -a inventory_hosts=()
+        mapfile -t inventory_hosts < <(python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" list-ssh-hosts --inventory-file "$inventory_file")
+
+        for inventory_line in "${inventory_hosts[@]}"; do
+          IFS='|' read -r name group host user connection port keyfile password_var <<< "$inventory_line"
+          [[ -n "$name" ]] || continue
+
+          if [[ "$connection" == "local" || "$name" == "local" || "$host" == "127.0.0.1" || "$host" == "localhost" ]]; then
+            echo "${name}: local connection, no SSH key verification required."
+            continue
+          fi
+
+          target="$host"
+          if [[ -n "$user" ]]; then
+            target="${user}@${host}"
+          fi
+
+          checked=$((checked + 1))
+          if ssh -n -i "$key_file" -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$target" true >/dev/null 2>&1; then
+            echo "${name}: key-based SSH verified for ${target}."
+          else
+            echo "ERROR: ${name}: key-based SSH failed for ${target}." >&2
+            failures=$((failures + 1))
+          fi
+        done
+
+        if (( failures > 0 )); then
+          echo "ERROR: ${failures} inventory host(s) do not have working key-based SSH. Fix SSH before continuing." >&2
+          exit 1
+        fi
+
+        echo "Key-based SSH verified for ${checked} non-local inventory host(s)."
+
+
+  normalise-auth:
+    desc: Switch inventory hosts to key-based steady-state SSH authentication when SSH key login works.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Normalise SSH authentication for steady state." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo "ERROR: Missing inventory file: ${inventory_file}" >&2
+          echo "Run: task env_create:inventory:init" >&2
+          exit 1
+        fi
+
+        if [[ ! -f "$key_file" ]]; then
+          echo "ERROR: Missing SSH key file: ${key_file}" >&2
+          echo "Run: task ssh:key:ensure" >&2
+          exit 1
+        fi
+
+        python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" normalise-auth \
+          --inventory-file "$inventory_file" \
+          --ssh-key-file "$key_file"
+
+
+  audit:
+    desc: Report SSH key and per-server passwordless SSH status.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Report SSH key and per-server status." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+        public_key_file="${key_file}.pub"
+
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.HEALTH_CHECK_SCRIPT}}"
+
+        status_ok() { printf '[OK]'; }
+        status_missing() { printf '[MISSING]'; }
+        status_failed() { printf '[FAIL]'; }
+        status_skipped() { printf '[SKIPPED]'; }
+
+        health_heading "SSH health"
+        health_command "ssh installed" ssh ssh -V
+        health_command "ssh-copy-id installed" ssh-copy-id ssh-copy-id -h
+        health_file "inventory file" "$inventory_file"
+        health_file "private key" "$key_file"
+        health_file "public key" "$public_key_file"
+
+        if [[ -f "$public_key_file" ]]; then
+          health_ok "public key type" "$(awk '{print $1}' "$public_key_file")"
+        fi
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo
+          echo "No per-server audit available. Run: task env_create:inventory:init"
+          exit 0
+        fi
+
+        parse_inventory() {
+          awk '
+            function trim(value) {
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+              gsub(/^"|"$/, "", value)
+              gsub(/^'"'"'|'"'"'$/, "", value)
+              return value
+            }
+            function indent_of(value) {
+              match(value, /^[ ]*/)
+              return RLENGTH
+            }
+            function emit() {
+              if (current != "") {
+                print current "|" host "|" user "|" connection "|" port "|" keyfile "|" password
+              }
+            }
+            /^[[:space:]]*($|#)/ { next }
+            {
+              stripped = trim($0)
+              indent = indent_of($0)
+
+              if (stripped == "hosts:") {
+                in_hosts = 1
+                hosts_indent = indent
+                current = ""
+                next
+              }
+
+              if (in_hosts && indent <= hosts_indent && stripped != "hosts:") {
+                emit()
+                in_hosts = 0
+                current = ""
+              }
+
+              if (!in_hosts) {
+                next
+              }
+
+              if (stripped ~ /^[A-Za-z0-9_.-]+:$/ && indent > hosts_indent) {
+                emit()
+                current = substr(stripped, 1, length(stripped) - 1)
+                host = current
+                user = ""
+                connection = "ssh"
+                port = "22"
+                keyfile = ""
+                password = "no"
+                next
+              }
+
+              if (current != "" && index(stripped, ":") > 0) {
+                key = substr(stripped, 1, index(stripped, ":") - 1)
+                value = trim(substr(stripped, index(stripped, ":") + 1))
+                if (key == "ansible_host" && value != "") host = value
+                if (key == "ansible_user") user = value
+                if (key == "ansible_connection" && value != "") connection = value
+                if (key == "ansible_port" && value != "") port = value
+                if (key == "ansible_ssh_private_key_file" && value != "") keyfile = value
+                if (key == "ansible_password" && value != "") password = "yes"
+              }
+            }
+            END { emit() }
+          ' "$inventory_file"
+        }
+
+        echo
+        echo "Per-server status"
+        printf '%-24s %-28s %-14s %-14s %s\n' "Server" "Target" "Connection" "Auth mode" "Status"
+        printf '%-24s %-28s %-14s %-14s %s\n' "------" "------" "----------" "---------" "------"
+
+        while IFS='|' read -r name host user connection port keyfile password; do
+          [[ -n "$name" ]] || continue
+
+          auth_mode="password"
+          if [[ -n "$keyfile" ]]; then
+            auth_mode="key"
+          elif [[ "$password" == "yes" ]]; then
+            auth_mode="password"
+          fi
+
+          if [[ "$connection" == "local" ]]; then
+            printf '%-24s %-28s %-14s %-14s ' "$name" "$host" "$connection" "local"
+            status_ok
+            printf ' (local)\n'
+            continue
+          fi
+
+          target="$host"
+          if [[ -n "$user" ]]; then
+            target="${user}@${host}"
+          fi
+
+          if [[ ! -f "$key_file" ]]; then
+            printf '%-24s %-28s %-14s %-14s ' "$name" "$target" "$connection" "$auth_mode"
+            status_skipped
+            printf ' (missing key)\n'
+            continue
+          fi
+
+          if ssh -n -i "$key_file" -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$target" true >/dev/null 2>&1; then
+            printf '%-24s %-28s %-14s %-14s ' "$name" "$target" "$connection" "key"
+            status_ok
+            printf '\n'
+          else
+            printf '%-24s %-28s %-14s %-14s ' "$name" "$target" "$connection" "$auth_mode"
+            status_failed
+            printf ' (run task ssh:copy-id)\n'
+          fi
+        done < <(parse_inventory)

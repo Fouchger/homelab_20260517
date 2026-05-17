@@ -1,0 +1,273 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/apps.Taskfile.yml
+# Purpose:
+#   Install and audit core homelab applications and automation tooling.
+# Notes:
+#   - This Taskfile must not create state/config/.env.
+#   - This Taskfile must not create state/secrets/passwords/passwords.enc.env.
+#   - Avoid heredocs in this file; use committed files or printf instead.
+# =============================================================================
+
+version: '3'
+
+vars:
+  HASHICORP_KEYRING: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  HASHICORP_APT_LIST: /etc/apt/sources.list.d/hashicorp.list
+
+tasks:
+  default:
+    desc: Show available application tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show available application tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  help:
+    desc: Show safe application setup tasks
+    cmds:
+      - |
+        set -euo pipefail
+        printf '%s\n' \
+          'Safe application task help' \
+          '' \
+          'Setup' \
+          '  task apps:setup' \
+          '    Install Python, pipx, Ansible, Terraform, Packer, and supporting packages.' \
+          '' \
+          'Install' \
+          '  task apps:prerequisites' \
+          '    Install common Debian/Ubuntu prerequisites used by the app installers.' \
+          '' \
+          '  task apps:python' \
+          '    Install Python 3, pip, venv, setuptools, wheel, and pipx.' \
+          '' \
+          '  task apps:ansible' \
+          '    Install Ansible with pipx.' \
+          '' \
+          '  task apps:hashicorp:repo' \
+          '    Configure the official HashiCorp apt repository.' \
+          '' \
+          '  task apps:terraform' \
+          '    Install Terraform from the official HashiCorp apt repository.' \
+          '' \
+          '  task apps:packer' \
+          '    Install Packer from the official HashiCorp apt repository.' \
+          '' \
+          'Audit' \
+          '  task apps:audit' \
+          '    Report installed application tooling status.'
+
+  setup:
+    desc: Install Python, pipx, Ansible, Terraform, Packer, and supporting packages.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install homelab applications and automation tooling." "PEACH"
+      - task: prerequisites
+      - task: ansible
+      - task: terraform
+      - task: packer
+      - task: audit
+
+  prerequisites:
+    desc: Install common Debian/Ubuntu prerequisites used by app installers.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install common application prerequisites." "PEACH"
+      - |
+        set -euo pipefail
+
+        if [[ "${EUID}" -eq 0 ]]; then
+          SUDO=""
+        else
+          SUDO="sudo"
+        fi
+
+        $SUDO apt-get update -y
+        $SUDO apt-get install -y \
+          ca-certificates \
+          curl \
+          gpg \
+          gnupg \
+          lsb-release \
+          nmap \
+          openssh-client \
+          python3-apt \
+          software-properties-common \
+          unzip \
+          wget \
+          arp-scan
+
+  python:
+    desc: Install Python 3, pip, venv, setuptools, wheel, and pipx.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install Python, pip, venv, and pipx." "PEACH"
+      - |
+        set -euo pipefail
+
+        if [[ "${EUID}" -eq 0 ]]; then
+          SUDO=""
+        else
+          SUDO="sudo"
+        fi
+
+        $SUDO apt-get update -y
+        $SUDO apt-get install -y \
+          python3 \
+          python3-pip \
+          python3-setuptools \
+          python3-venv \
+          pipx
+
+        python3 -m pipx ensurepath || true
+        export PATH="${HOME}/.local/bin:${PATH}"
+
+        printf '%s\n' 'Installed Python tooling:'
+        python3 --version
+        python3 -m pip --version
+        python3 -m pipx --version
+
+  ansible:
+    desc: Install Ansible with pipx.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install Ansible." "PEACH"
+      - task: python
+      - |
+        set -euo pipefail
+
+        export PATH="${HOME}/.local/bin:${PATH}"
+
+        if ! command -v ansible >/dev/null 2>&1; then
+          python3 -m pipx install --include-deps ansible
+        else
+          echo "Ansible already installed: $(ansible --version | head -n 1)"
+        fi
+
+
+        echo "Installed Ansible version:"
+        ansible --version | head -n 1
+
+  hashicorp:repo:
+    desc: Configure the official HashiCorp apt repository.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Configure the official HashiCorp apt repository." "PEACH"
+      - |
+        set -euo pipefail
+
+        if [[ "${EUID}" -eq 0 ]]; then
+          SUDO=""
+        else
+          SUDO="sudo"
+        fi
+
+        $SUDO apt-get update -y
+        $SUDO apt-get install -y gnupg software-properties-common wget lsb-release
+
+        wget -O- https://apt.releases.hashicorp.com/gpg \
+          | gpg --dearmor \
+          | $SUDO tee "{{.HASHICORP_KEYRING}}" >/dev/null
+
+        release_codename="$(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || true)"
+        if [[ -z "$release_codename" ]]; then
+          release_codename="$(lsb_release -cs)"
+        fi
+
+        echo "deb [arch=$(dpkg --print-architecture) signed-by={{.HASHICORP_KEYRING}}] https://apt.releases.hashicorp.com ${release_codename} main" \
+          | $SUDO tee "{{.HASHICORP_APT_LIST}}" >/dev/null
+
+        $SUDO apt-get update -y
+
+  terraform:
+    desc: Install Terraform from the official HashiCorp apt repository.
+    cmds:
+      - task: hashicorp:repo
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install Terraform from the official HashiCorp apt repository." "PEACH"
+      - |
+        set -euo pipefail
+
+        if [[ "${EUID}" -eq 0 ]]; then
+          SUDO=""
+        else
+          SUDO="sudo"
+        fi
+
+        $SUDO apt-get install -y terraform
+        terraform version | head -n 1
+
+  packer:
+    desc: Install Packer from the official HashiCorp apt repository.
+    cmds:
+      - task: hashicorp:repo
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Install Packer from the official HashiCorp apt repository." "PEACH"
+      - |
+        set -euo pipefail
+
+        if [[ "${EUID}" -eq 0 ]]; then
+          SUDO=""
+        else
+          SUDO="sudo"
+        fi
+
+        $SUDO apt-get install -y packer
+        packer version
+
+  audit:
+    desc: Report installed application tooling status.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Audit application tooling." "PEACH"
+      - |
+        set -euo pipefail
+
+        export PATH="${HOME}/.local/bin:${PATH}"
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.HEALTH_CHECK_SCRIPT}}"
+
+        health_heading "Application health"
+        health_command "Python" python3 python3 --version
+        health_command "pip" pip3 pip3 --version
+        health_command "pipx" python3 python3 -m pipx --version
+        health_binary_or_pipx "Ansible" ansible ansible ansible --version
+        health_command "Terraform" terraform terraform version
+        health_command "Packer" packer packer version
+        health_command "nmap" nmap nmap --version
+
+        health_heading "Package sources"
+        health_apt_package "nmap" nmap
+        health_apt_package "Terraform" terraform
+        health_apt_package "Packer" packer
+        health_pipx_package "Ansible pipx package" ansible
+

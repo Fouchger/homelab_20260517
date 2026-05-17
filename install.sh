@@ -19,8 +19,8 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
-readonly REPO_NAME="${HOMELAB_REPO_NAME:-homelab_20260517}"
-readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/homelab_20260517}"
+readonly REPO_NAME="${HOMELAB_REPO_NAME:-homelab_20260501}"
+readonly GITHUB_REPO="${GITHUB_REPO:-Fouchger/homelab_20260501}"
 readonly GITHUB_BRANCH="${GITHUB_BRANCH:-${HOMELAB_BRANCH:-main}}"
 readonly GIT_PROTOCOL="${HOMELAB_GIT_PROTOCOL:-https}"
 readonly NONINTERACTIVE="${NONINTERACTIVE:-0}"

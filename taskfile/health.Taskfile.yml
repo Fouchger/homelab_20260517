@@ -1,0 +1,146 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# ==============================================================================
+# File: taskfile/health.Taskfile.yml
+# Purpose:
+#   Consolidated operational health and capability checks for the homelab control plane.
+# Notes:
+#   - Health checks must not print secret values.
+#   - This Taskfile must not create or recreate state/config/.env.
+#   - This Taskfile must not create or recreate passwords.enc.env.
+# ============================================================================== 
+
+version: '3'
+
+tasks:
+  default:
+    desc: Run consolidated homelab health checks
+    cmds:
+      - task: check
+
+  check:
+    desc: Run consolidated homelab health checks
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Run consolidated homelab health checks." "PEACH"
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.HEALTH_CHECK_SCRIPT}}"
+
+        health_heading "Repository files"
+        health_file "Config environment" "{{.CONFIG_ENV_FILE}}"
+        health_file "Encrypted password file" "{{.PASSWORDS_ENCRYPTED_FILE}}"
+        health_file "Ansible inventory" "{{.ANSIBLE_INVENTORY_FILE}}"
+        health_optional_file "Network discovery report" "{{.ANSIBLE_DISCOVERY_REPORT}}"
+
+        health_heading "Secrets readiness"
+        health_sops_status "Password file" "{{.PASSWORDS_ENCRYPTED_FILE}}" "{{.SOPS_AGE_KEY_FILE}}" || true
+
+        health_heading "Core commands"
+        health_command "Task" task task --version
+        health_command "Git" git git --version
+        health_command "GitHub CLI" gh gh --version
+        health_command "SOPS" sops sops --version
+        health_command "age" age age --version
+        health_command "SSH" ssh ssh -V
+        health_command "Python" python3 python3 --version
+        health_command "pipx" python3 python3 -m pipx --version
+        health_binary_or_pipx "Ansible" ansible ansible ansible --version
+        health_command "Terraform" terraform terraform version
+        health_command "Packer" packer packer version
+
+  capabilities:
+    desc: Show what the homelab control plane can currently do.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Report homelab control-plane capabilities." "PEACH"
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.HEALTH_CHECK_SCRIPT}}"
+
+        health_heading "Control-plane capabilities"
+
+        if [[ -f "{{.CONFIG_ENV_FILE}}" ]]; then
+          health_ok "Configuration state" "ready"
+        else
+          health_missing "Configuration state" "run ./install.sh"
+        fi
+
+        if health_sops_status "Secret decryption" "{{.PASSWORDS_ENCRYPTED_FILE}}" "{{.SOPS_AGE_KEY_FILE}}" >/dev/null 2>&1; then
+          health_ok "Secret-backed automation" "ready"
+        else
+          health_warn "Secret-backed automation" "password file exists but is locked or unavailable"
+        fi
+
+        if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+          health_ok "GitHub operations" "authenticated"
+        else
+          health_warn "GitHub operations" "run task github:setup"
+        fi
+
+        if command -v ssh >/dev/null 2>&1 && [[ -f "${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" ]]; then
+          health_ok "SSH key operations" "ready"
+        else
+          health_warn "SSH key operations" "run task ssh:setup"
+        fi
+
+        if [[ -f "{{.ANSIBLE_INVENTORY_FILE}}" ]]; then
+          health_ok "SSH inventory" "ready"
+        else
+          health_warn "SSH inventory" "run task env_create:inventory:init"
+        fi
+
+        if command -v nmap >/dev/null 2>&1; then
+          health_ok "Network discovery" "ready; run task env_create:inventory:discover DISCOVERY_CIDR=..."
+        else
+          health_warn "Network discovery" "run task apps:prerequisites"
+        fi
+
+        if command -v terraform >/dev/null 2>&1 && command -v packer >/dev/null 2>&1; then
+          health_ok "Infrastructure tooling" "Terraform and Packer available"
+        else
+          health_warn "Infrastructure tooling" "run task apps:setup"
+        fi
+
+  setup-state:
+    desc: Show first-run and repeat-run state markers.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Report first-run and repeat-run state." "PEACH"
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.HEALTH_CHECK_SCRIPT}}"
+
+        health_heading "Setup state"
+        if [[ -f "{{.HOMELAB_SETUP_MARKER}}" ]]; then
+          health_ok "Homelab setup" "repeat run; marker {{.HOMELAB_SETUP_MARKER}}"
+        else
+          health_warn "Homelab setup" "first run not marked complete"
+        fi
+
+        health_file "Config environment" "{{.CONFIG_ENV_FILE}}"
+        health_file "Encrypted password file" "{{.PASSWORDS_ENCRYPTED_FILE}}"
+        health_file "Ansible inventory" "{{.ANSIBLE_INVENTORY_FILE}}"
+
+  all:
+    desc: Run existing detailed audits across core task areas
+    cmds:
+      - task: check
+      - task: capabilities
+      - task: setup-state
+      - task: github:audit
+      - task: apps:audit
+      - task: ssh:audit
+      - task: passwords:audit

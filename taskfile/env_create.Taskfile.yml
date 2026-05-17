@@ -1,0 +1,211 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/env_create.Taskfile.yml
+# Purpose:
+#   Create baseline state files and folders that are safe for the environment
+#   bootstrap layer to own, including the SSH inventory.
+# Notes:
+#   - install.sh remains the only creator of state/config/.env.
+#   - passwords.Taskfile.yml remains the only creator of
+#     state/secrets/passwords/passwords.enc.env.
+#   - This Taskfile may create and update the SSH inventory file.
+#   - This Taskfile must never create or recreate .env or passwords.enc.env.
+# =============================================================================
+
+version: '3'
+
+tasks:
+  default:
+    desc: Show available environment creation tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available environment creation tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  help:
+    desc: Show safe environment creation tasks
+    cmds:
+      - |
+        set -euo pipefail
+
+        cat <<'EOHELP'
+        Safe environment creation task help
+
+        Setup
+          task env_create:inventory:init
+            Create state/ansible/inventory.yml when missing with a minimum local
+            host definition.
+
+        Inventory
+          task env_create:inventory:add
+            Interactively add one or more servers to state/ansible/inventory.yml.
+            The SSH password prompt offers a default variable name based on
+            the hostname, then asks for an optional hidden password value.
+
+          task env_create:inventory:discover DISCOVERY_CIDR=192.168.20.0/24
+            Scan a network with nmap and write an advisory report for hosts not
+            yet represented by ansible_host in the inventory.
+
+          task env_create:inventory:add:server INVENTORY_GROUP=... INVENTORY_HOSTNAME=... INVENTORY_ANSIBLE_HOST=... INVENTORY_SSH_USER=...
+            Non-interactively add or update a server. Intended for other tasks,
+            automation and SSH workflows.
+
+            Optional values:
+              INVENTORY_ANSIBLE_HOST=...       # SSH IP address or DNS name. Defaults to INVENTORY_HOSTNAME when omitted.
+              INVENTORY_VM_LXC_ID=...
+              INVENTORY_MAC_ADDRESS=...
+              INVENTORY_SSH_PASSWORD_VAR=...  # Defaults to <HOSTNAME>_SSH_PASSWORD when omitted.
+              INVENTORY_PYTHON_INTERPRETER=auto_silent
+              INVENTORY_SSH_PORT=22
+        EOHELP
+
+  inventory:init:
+    desc: Create the SSH inventory file if it does not exist.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Create the SSH inventory file if it does not exist." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        inventory_dir="{{.ANSIBLE_DIR}}"
+        current_user="${USER:-$(id -un)}"
+
+        mkdir -p "$inventory_dir"
+
+        if [[ -f "$inventory_file" ]]; then
+          echo "Inventory already exists: ${inventory_file}"
+          exit 0
+        fi
+
+        {
+          printf 'all:\n'
+          printf '  hosts:\n'
+          printf '    local:\n'
+          printf '      ansible_host: 127.0.0.1\n'
+          printf '      ansible_connection: local\n'
+          printf '      ansible_user: %s\n' "$current_user"
+          printf '      ansible_port: 22\n'
+          printf '  children: {}\n'
+        } > "$inventory_file"
+
+        chmod 600 "$inventory_file"
+        echo "Created minimum local inventory: ${inventory_file}"
+
+  inventory:add:
+    desc: Interactively add one or more servers to the SSH inventory.
+    cmds:
+      - |
+        # Print Header
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Interactively add or update SSH inventory servers." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        password_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo "Inventory file does not exist. Creating the baseline inventory first."
+          task env_create:inventory:init
+        fi
+
+        python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" interactive-add \
+          --inventory-file "$inventory_file" \
+          --password-file "$password_file" \
+          --recipients-file "{{.SOPS_AGE_RECIPIENTS_FILE}}"
+
+
+  inventory:discover:
+    desc: Scan a network and report hosts not yet represented in the SSH inventory.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Discover network hosts for inventory planning." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        report_file="{{.ANSIBLE_DISCOVERY_REPORT}}"
+        cidr="{{.DISCOVERY_CIDR | default ""}}"
+
+        if [[ ! -f "$inventory_file" ]]; then
+          echo "Inventory file does not exist. Creating the baseline inventory first."
+          task env_create:inventory:init
+        fi
+
+        if [[ -z "$cidr" ]]; then
+          printf 'Network CIDR to scan, for example 192.168.20.0/24: ' > /dev/tty
+          IFS= read -r cidr < /dev/tty
+        fi
+
+        if [[ -z "$cidr" ]]; then
+          echo "ERROR: DISCOVERY_CIDR is required." >&2
+          exit 1
+        fi
+
+        python3 -S "{{.NETWORK_DISCOVERY_SCRIPT}}" \
+          --cidr "$cidr" \
+          --inventory-file "$inventory_file" \
+          --report-file "$report_file"
+
+  inventory:add:server:
+    desc: Add or update a server in the SSH inventory using task variables.
+    cmds:
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        inventory_dir="{{.ANSIBLE_DIR}}"
+        password_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+        group="{{.INVENTORY_GROUP}}"
+        hostname="{{.INVENTORY_HOSTNAME}}"
+        ansible_host="{{.INVENTORY_ANSIBLE_HOST | default ""}}"
+        vm_lxc_id="{{.INVENTORY_VM_LXC_ID | default ""}}"
+        mac_address="{{.INVENTORY_MAC_ADDRESS | default ""}}"
+        ssh_user="{{.INVENTORY_SSH_USER}}"
+        ssh_password_var="{{.INVENTORY_SSH_PASSWORD_VAR | default ""}}"
+        python_interpreter="{{.INVENTORY_PYTHON_INTERPRETER | default "auto_silent"}}"
+        ssh_port="{{.INVENTORY_SSH_PORT | default "22"}}"
+
+        if [[ -z "$group" || -z "$hostname" || -z "$ssh_user" ]]; then
+          echo "ERROR: INVENTORY_GROUP, INVENTORY_HOSTNAME, and INVENTORY_SSH_USER are required." >&2
+          exit 1
+        fi
+
+        if [[ -n "$ssh_password_var" && ! -f "$password_file" ]]; then
+          echo "WARNING: Password variable ${ssh_password_var} was supplied, but ${password_file} does not exist yet." >&2
+          echo "         This task will reference the variable only. It will not create the encrypted password file." >&2
+        fi
+
+        mkdir -p "$inventory_dir"
+
+        if [[ ! -f "$inventory_file" ]]; then
+          task env_create:inventory:init
+        fi
+
+        python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" add-server \
+          --inventory-file "$inventory_file" \
+          --password-file "$password_file" \
+          --recipients-file "{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          --group "$group" \
+          --hostname "$hostname" \
+          --ansible-host "$ansible_host" \
+          --ssh-user "$ssh_user" \
+          --vm-lxc-id "$vm_lxc_id" \
+          --mac-address "$mac_address" \
+          --ssh-password-var "$ssh_password_var" \
+          --python-interpreter "$python_interpreter" \
+          --ssh-port "$ssh_port"

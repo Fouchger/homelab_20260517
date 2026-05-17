@@ -1,0 +1,462 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# =============================================================================
+# File: taskfile/github.Taskfile.yml
+# Purpose:
+#   Install Git and GitHub CLI, configure local Git identity, authenticate gh,
+#   and report audit status without printing secrets.
+# Notes:
+#   - GitHub usernames and Git identity values are stored in state/config/.env.
+#   - GitHub tokens are stored in the SOPS encrypted password file.
+#   - SOPS must always be given the repo-local Age key file explicitly.
+# =============================================================================
+
+version: '3'
+
+tasks:
+  default:
+    desc: Show available GitHub tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available GitHub tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  setup:
+    desc: Install Git and gh, configure identity, authenticate GitHub CLI, and audit status.
+    cmds:
+      - task: install
+      - task: configure
+      - task: auth
+      - task: audit
+
+  install:
+    desc: Install Git and GitHub CLI if they are missing.
+    cmds:
+      - |
+        set -euo pipefail
+
+        require_sudo() {
+          if [[ "${EUID}" -eq 0 ]]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
+        }
+
+        package_installed() {
+          dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+        }
+
+        install_github_cli_repo() {
+          $SUDO apt-get update -y
+          $SUDO apt-get install -y curl ca-certificates gnupg
+          $SUDO install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | $SUDO tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+          $SUDO chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | $SUDO tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+          $SUDO apt-get update -y
+          $SUDO apt-get install -y gh
+        }
+
+        require_sudo
+
+        if ! command -v git >/dev/null 2>&1; then
+          $SUDO apt-get update -y
+          $SUDO apt-get install -y git
+        fi
+
+        if ! command -v gh >/dev/null 2>&1; then
+          if package_installed gh; then
+            $SUDO apt-get install -y gh
+          else
+            install_github_cli_repo
+          fi
+        fi
+
+        echo "Installed tool versions:"
+        git --version
+        gh --version | head -n 1
+
+  configure:
+    desc: Configure GitHub username and Git identity, asking for missing values.
+    cmds:
+      - |
+        set -euo pipefail
+
+        config_file="{{.CONFIG_ENV_FILE}}"
+
+        if [[ ! -f "$config_file" ]]; then
+          echo "ERROR: Missing config file: ${config_file}" >&2
+          echo "Run ./install.sh first. Only install.sh may create this file." >&2
+          exit 1
+        fi
+
+        chmod 600 "$config_file"
+
+        env_quote() {
+          local value="$1"
+          value="${value//\\/\\\\}"
+          value="${value//\"/\\\"}"
+          printf '"%s"' "$value"
+        }
+
+        get_config_value() {
+          local key="$1"
+          bash -c 'set -a; [[ -f "$1" ]] && source "$1"; printf "%s" "${!2-}"' _ "$config_file" "$key"
+        }
+
+        set_config_value() {
+          local key="$1"
+          local value="$2"
+          local quoted_value
+          quoted_value="$(env_quote "$value")"
+
+          CONFIG_FILE="$config_file" CONFIG_KEY="$key" CONFIG_VALUE="$quoted_value" perl -0pi -e '
+            my $key = $ENV{"CONFIG_KEY"};
+            my $value = $ENV{"CONFIG_VALUE"};
+            my $line = "$key=$value\n";
+            if (s/^\Q$key\E=.*/$line/m) {
+              # Existing value updated in place.
+            } else {
+              $_ .= "\n" if length($_) && $_ !~ /\n\z/;
+              $_ .= $line;
+            }
+          ' "$config_file"
+
+          chmod 600 "$config_file"
+        }
+
+        read_from_tty() {
+          local prompt="$1"
+          local value=""
+
+          if [[ -r /dev/tty ]]; then
+            printf '%s: ' "$prompt" > /dev/tty
+            IFS= read -r value < /dev/tty || true
+          else
+            printf '%s: ' "$prompt" >&2
+            IFS= read -r value || true
+          fi
+
+          printf '%s' "$value"
+        }
+
+        prompt_if_missing() {
+          local key="$1"
+          local prompt="$2"
+          local current_value
+
+          current_value="$(get_config_value "$key")"
+
+          if [[ -z "$current_value" ]]; then
+            if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
+              echo "ERROR: ${key} is required in NONINTERACTIVE mode. Set it in ${config_file} or the environment." >&2
+              exit 1
+            fi
+
+            current_value="$(read_from_tty "$prompt")"
+
+            if [[ -z "$current_value" ]]; then
+              echo "ERROR: ${key} is required. Add it to ${config_file} or rerun this task interactively." >&2
+              exit 1
+            fi
+
+            set_config_value "$key" "$current_value"
+          fi
+
+          printf '%s' "$current_value"
+        }
+
+        github_username="$(prompt_if_missing "{{.GITHUB_USERNAME_KEY}}" "GitHub username")"
+        git_user_name="$(prompt_if_missing "{{.GIT_USER_NAME_KEY}}" "Git: Username (Name)")"
+        git_user_email="$(prompt_if_missing "{{.GIT_USER_EMAIL_KEY}}" "Git: User email (name@email.com)")"
+
+        git config --global user.name "$git_user_name"
+        git config --global user.email "$git_user_email"
+
+        echo "Configured Git identity for ${git_user_name} <${git_user_email}>."
+        echo "Configured GitHub username: ${github_username}."
+
+  auth:
+    desc: Authenticate GitHub CLI with a token if not already logged in.
+    cmds:
+      - |
+        set -euo pipefail
+
+        config_file="{{.CONFIG_ENV_FILE}}"
+        encrypted_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+        runtime_file="{{.PASSWORDS_RUNTIME_FILE}}"
+        age_key_file="{{.SOPS_AGE_KEY_FILE}}"
+        age_recipients_file="{{.SOPS_AGE_RECIPIENTS_FILE}}"
+
+        if [[ ! -f "$config_file" ]]; then
+          echo "ERROR: Missing config file: ${config_file}" >&2
+          echo "Run ./install.sh first. Only install.sh may create this file." >&2
+          exit 1
+        fi
+
+        chmod 600 "$config_file"
+        trap 'rm -f "$runtime_file"' EXIT
+
+        env_quote() {
+          local value="$1"
+          value="${value//\\/\\\\}"
+          value="${value//\"/\\\"}"
+          printf '"%s"' "$value"
+        }
+
+        get_config_value() {
+          local key="$1"
+          bash -c 'set -a; [[ -f "$1" ]] && source "$1"; printf "%s" "${!2-}"' _ "$config_file" "$key"
+        }
+
+        set_config_value() {
+          local key="$1"
+          local value="$2"
+          local quoted_value
+          quoted_value="$(env_quote "$value")"
+
+          CONFIG_FILE="$config_file" CONFIG_KEY="$key" CONFIG_VALUE="$quoted_value" perl -0pi -e '
+            my $key = $ENV{"CONFIG_KEY"};
+            my $value = $ENV{"CONFIG_VALUE"};
+            my $line = "$key=$value\n";
+            if (s/^\Q$key\E=.*/$line/m) {
+              # Existing value updated in place.
+            } else {
+              $_ .= "\n" if length($_) && $_ !~ /\n\z/;
+              $_ .= $line;
+            }
+          ' "$config_file"
+
+          chmod 600 "$config_file"
+        }
+
+        sops_ready() {
+          [[ -f "$age_key_file" ]] || return 1
+          [[ -f "$age_recipients_file" ]] || return 1
+          [[ -f "$encrypted_file" ]] || return 1
+          command -v sops >/dev/null 2>&1 || return 1
+        }
+
+        decrypt_password_file() {
+          SOPS_AGE_KEY_FILE="$age_key_file" sops --decrypt --input-type dotenv --output-type dotenv "$encrypted_file" > "$runtime_file"
+          chmod 600 "$runtime_file"
+        }
+
+        get_password_value() {
+          local key="$1"
+
+          if sops_ready && grep -Eq '^(sops_|sops:)' "$encrypted_file"; then
+            if decrypt_password_file 2>/dev/null; then
+              bash -c 'set -a; [[ -f "$1" ]] && source "$1"; printf "%s" "${!2-}"' _ "$runtime_file" "$key"
+            fi
+          fi
+        }
+
+        set_password_value() {
+          local key="$1"
+          local value="$2"
+          local tmp_file
+          local recipient
+
+          tmp_file="$(mktemp)"
+
+          if ! sops_ready; then
+            rm -f "$tmp_file"
+            return 1
+          fi
+
+          if ! grep -Eq '^(sops_|sops:)' "$encrypted_file"; then
+            rm -f "$tmp_file"
+            return 1
+          fi
+
+          if ! decrypt_password_file; then
+            rm -f "$tmp_file"
+            echo "ERROR: Could not decrypt ${encrypted_file} with ${age_key_file}." >&2
+            return 1
+          fi
+
+          grep -v -E "^${key}=" "$runtime_file" > "$tmp_file" || true
+          printf '%s=%s\n' "$key" "$(env_quote "$value")" >> "$tmp_file"
+          cat "$tmp_file" > "$runtime_file"
+          chmod 600 "$runtime_file"
+
+          recipient="$(tr -d '[:space:]' < "$age_recipients_file")"
+
+          if [[ -z "$recipient" ]]; then
+            rm -f "$tmp_file"
+            echo "ERROR: Empty SOPS Age recipient file: ${age_recipients_file}" >&2
+            return 1
+          fi
+
+          if ! SOPS_AGE_KEY_FILE="$age_key_file" sops --encrypt --age "$recipient" --input-type dotenv --output-type dotenv "$runtime_file" > "$tmp_file"; then
+            rm -f "$tmp_file"
+            echo "ERROR: Could not encrypt ${encrypted_file}." >&2
+            return 1
+          fi
+
+          cat "$tmp_file" > "$encrypted_file"
+          rm -f "$tmp_file"
+          chmod 600 "$encrypted_file"
+        }
+
+        read_secret_from_tty() {
+          local prompt="$1"
+          local value=""
+
+          if [[ -r /dev/tty ]]; then
+            printf '%s: ' "$prompt" > /dev/tty
+            stty -echo < /dev/tty
+            IFS= read -r value < /dev/tty || true
+            stty echo < /dev/tty
+            printf '\n' > /dev/tty
+          else
+            printf '%s: ' "$prompt" >&2
+            IFS= read -r value || true
+          fi
+
+          printf '%s' "$value"
+        }
+
+        if gh auth status -h github.com >/dev/null 2>&1; then
+          gh auth setup-git -h github.com >/dev/null 2>&1 || true
+          echo "GitHub CLI is already authenticated and Git credential helper has been configured."
+          exit 0
+        fi
+
+        github_token="$(get_password_value "{{.GITHUB_TOKEN_KEY}}")"
+        token_source="encrypted password file"
+
+        if [[ -z "$github_token" ]]; then
+          github_token="$(get_config_value "{{.GITHUB_TOKEN_KEY}}")"
+          token_source="local config file"
+        fi
+
+        if [[ -z "$github_token" ]]; then
+          if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
+            echo "ERROR: {{.GITHUB_TOKEN_KEY}} is required in NONINTERACTIVE mode." >&2
+            echo "Store it with task passwords:edit or rerun this task interactively." >&2
+            exit 1
+          fi
+
+          github_token="$(read_secret_from_tty "GitHub token")"
+
+          if [[ -z "$github_token" ]]; then
+            echo "ERROR: {{.GITHUB_TOKEN_KEY}} is required to authenticate gh." >&2
+            exit 1
+          fi
+
+          if set_password_value "{{.GITHUB_TOKEN_KEY}}" "$github_token"; then
+            token_source="encrypted password file"
+            echo "Saved GitHub token in {{.PASSWORDS_ENCRYPTED_FILE}}."
+          elif [[ "${ALLOW_PLAINTEXT_TOKEN:-0}" == "1" ]]; then
+            set_config_value "{{.GITHUB_TOKEN_KEY}}" "$github_token"
+            token_source="local config file"
+            echo "WARNING: ALLOW_PLAINTEXT_TOKEN=1 set. Saved GitHub token in {{.CONFIG_ENV_FILE}} with restricted permissions." >&2
+            echo "Run task passwords:setup, then rerun task github:auth to move the token into encrypted storage." >&2
+          else
+            echo "ERROR: Refusing to save {{.GITHUB_TOKEN_KEY}} in plaintext." >&2
+            echo "Run task passwords:setup first, then rerun task github:auth." >&2
+            exit 1
+          fi
+        fi
+
+        printf '%s\n' "$github_token" | gh auth login --hostname github.com --with-token
+        gh auth setup-git -h github.com >/dev/null 2>&1 || true
+
+        echo "GitHub CLI authenticated using token from ${token_source}."
+        echo "Git credential helper configured through gh."
+
+  audit:
+    desc: Show Git, gh, identity, token-source, and authentication status without printing secrets.
+    cmds:
+      - |
+        set -euo pipefail
+
+        config_file="{{.CONFIG_ENV_FILE}}"
+        encrypted_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+        runtime_file="{{.PASSWORDS_RUNTIME_FILE}}"
+        age_key_file="{{.SOPS_AGE_KEY_FILE}}"
+
+        trap 'rm -f "$runtime_file"' EXIT
+
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.HEALTH_CHECK_SCRIPT}}"
+
+        config_has_key() {
+          local key="$1"
+
+          if [[ -f "$config_file" ]]; then
+            [[ -n "$(bash -c 'set -a; source "$1"; printf "%s" "${!2-}"' _ "$config_file" "$key")" ]]
+          else
+            return 1
+          fi
+        }
+
+        encrypted_has_key() {
+          local key="$1"
+
+          if [[ -f "$encrypted_file" ]] && [[ -f "$age_key_file" ]] && grep -Eq '^(sops_|sops:)' "$encrypted_file" && command -v sops >/dev/null 2>&1; then
+            SOPS_AGE_KEY_FILE="$age_key_file" sops --decrypt --input-type dotenv --output-type dotenv "$encrypted_file" > "$runtime_file" 2>/dev/null || return 1
+            chmod 600 "$runtime_file"
+            [[ -n "$(bash -c 'set -a; source "$1"; printf "%s" "${!2-}"' _ "$runtime_file" "$key")" ]]
+          else
+            return 1
+          fi
+        }
+
+        health_heading "Git and GitHub health"
+
+        if command -v git >/dev/null 2>&1; then
+          health_ok "git installed" "$(git --version)"
+        else
+          health_missing "git installed"
+        fi
+
+        if command -v gh >/dev/null 2>&1; then
+          health_ok "gh installed" "$(gh --version | head -n 1)"
+        else
+          health_missing "gh installed"
+        fi
+
+        if [[ -n "$(git config --global user.name 2>/dev/null || true)" ]]; then
+          health_ok "Git user.name"
+        else
+          health_missing "Git user.name"
+        fi
+
+        if [[ -n "$(git config --global user.email 2>/dev/null || true)" ]]; then
+          health_ok "Git user.email"
+        else
+          health_missing "Git user.email"
+        fi
+
+        if config_has_key "{{.GITHUB_USERNAME_KEY}}"; then
+          health_ok "{{.GITHUB_USERNAME_KEY}} in config"
+        else
+          health_missing "{{.GITHUB_USERNAME_KEY}} in config"
+        fi
+
+        if encrypted_has_key "{{.GITHUB_TOKEN_KEY}}"; then
+          health_ok "{{.GITHUB_TOKEN_KEY}} source" "encrypted password file"
+        elif config_has_key "{{.GITHUB_TOKEN_KEY}}"; then
+          health_warn "{{.GITHUB_TOKEN_KEY}} source" "local config file"
+        else
+          health_missing "{{.GITHUB_TOKEN_KEY}} source"
+        fi
+
+        if command -v gh >/dev/null 2>&1 && gh auth status -h github.com >/dev/null 2>&1; then
+          health_ok "GitHub CLI authenticated"
+        else
+          health_missing "GitHub CLI authenticated"
+        fi
+
+        if git config --global --get credential.https://github.com.helper >/dev/null 2>&1 || git config --global --get credential.helper >/dev/null 2>&1; then
+          health_ok "Git credential helper"
+        else
+          health_missing "Git credential helper"
+        fi

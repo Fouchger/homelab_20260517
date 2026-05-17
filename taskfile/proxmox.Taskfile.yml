@@ -1,0 +1,606 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# ==============================================================================
+# File: taskfile/proxmox.Taskfile.yml
+# Purpose:
+#   Manage the Proxmox automation identity used by homelab API tasks.
+# Notes:
+#   - state/config/.env is created by install.sh only.
+#   - state/secrets/passwords/passwords.enc.env is created by passwords.Taskfile.yml only.
+#   - This file may update existing encrypted secret state, but must not print token values.
+# ==============================================================================
+
+version: '3'
+
+silent: true
+
+vars:
+  PVE_AUTOMATION_USER: homelab
+  PVE_AUTOMATION_ROLE: HomelabAutomation
+  PVE_AUTOMATION_TOKEN_ID: homelab
+  PVE_REALM: pve
+  PVE_AUTOMATION_PRIVS: >-
+    Datastore.AllocateSpace Datastore.Audit Pool.Allocate SDN.Use Sys.Audit Sys.Modify
+    VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit
+    VM.Config.Disk VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options
+    VM.Console VM.Migrate VM.PowerMgmt
+  PROXMOX_TMP_DIR: '{{.STATE_DIR}}/tmp/proxmox'
+
+tasks:
+  default:
+    desc: Show available Proxmox tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show available Proxmox tasks
+    cmds:
+      - task --taskfile '{{.TASKFILE}}' --list
+
+  help:
+    desc: Show safe Proxmox automation tasks
+    cmds:
+      - |
+        set -euo pipefail
+
+        cat <<'EOHELP'
+        Safe Proxmox task help
+
+        Setup
+          task proxmox:host:configure
+            Prompt once for Proxmox SSH and inventory metadata, then update
+            state/config/.env and state/ansible/inventory.yml. Reruns reuse existing values.
+
+          task proxmox:api:ensure
+            Create or reconcile the Proxmox automation role, user, root ACL, and API token.
+            Existing valid remote and encrypted local token state is reused.
+
+          task proxmox:api:recycle
+            Force-remove and recreate the automation API token, then update encrypted local state.
+
+        Audit
+          task proxmox:api:report
+            Show Proxmox API bootstrap status without printing secret values.
+        EOHELP
+
+  tools:check:
+    desc: Validate local tooling required for Proxmox API bootstrap
+    cmds:
+      - |
+        set -euo pipefail
+
+        missing=0
+        for tool in ssh sops jq awk sed mktemp; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "ERROR: Missing required tool: ${tool}" >&2
+            missing=1
+          fi
+        done
+
+        [ "$missing" -eq 0 ]
+        echo 'Proxmox API bootstrap tooling check completed successfully.'
+
+  host:configure:
+    desc: Configure the Proxmox SSH target in .env and Ansible inventory
+    deps:
+      - :env_create:inventory:init
+      - :passwords:encrypt
+    cmds:
+      - |
+        # =============================================================================
+        # Task: host:configure
+        # Purpose:
+        #   Capture Proxmox host connection metadata once, persist non-secret values
+        #   into state/config/.env, and add/update the matching Ansible inventory host.
+        # =============================================================================
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        upsert_env_value() {
+          env_key="$1"
+          env_value="$2"
+          temp_file="$(mktemp '{{.PROXMOX_TMP_DIR}}/config-env.XXXXXX')"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 != key' '{{.CONFIG_ENV_FILE}}' > "$temp_file"
+          fi
+          printf '%s=%s\n' "$env_key" "$env_value" >> "$temp_file"
+          mv "$temp_file" '{{.CONFIG_ENV_FILE}}'
+          chmod 600 '{{.CONFIG_ENV_FILE}}'
+        }
+
+        prompt_value() {
+          label="$1"
+          default_value="$2"
+          required="$3"
+
+          if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+            value="$default_value"
+            if [ "$required" = 'true' ] && [ -z "$value" ]; then
+              echo "ERROR: ${label} is required in NONINTERACTIVE mode. Set it in {{.CONFIG_ENV_FILE}} or the environment." >&2
+              exit 1
+            fi
+            printf '%s' "$value"
+            return 0
+          fi
+
+          if [ -n "$default_value" ]; then
+            printf '%s [%s]: ' "$label" "$default_value" > /dev/tty
+          else
+            printf '%s: ' "$label" > /dev/tty
+          fi
+
+          IFS= read -r value < /dev/tty
+          value="${value:-$default_value}"
+
+          if [ "$required" = 'true' ] && [ -z "$value" ]; then
+            echo "ERROR: ${label} is required." >&2
+            exit 1
+          fi
+
+          printf '%s' "$value"
+        }
+
+        prompt_secret() {
+          label="$1"
+          required="$2"
+
+          if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+            echo "ERROR: ${label} is required in NONINTERACTIVE mode. Store it in the encrypted password file before running." >&2
+            exit 1
+          fi
+
+          printf '%s: ' "$label" > /dev/tty
+          stty -echo < /dev/tty
+          IFS= read -r value < /dev/tty
+          stty echo < /dev/tty
+          printf '\n' > /dev/tty
+
+          if [ "$required" = 'true' ] && [ -z "$value" ]; then
+            echo "ERROR: ${label} is required." >&2
+            exit 1
+          fi
+
+          printf '%s' "$value"
+        }
+
+        make_default_password_var() {
+          raw_name="$1"
+          printf '%s' "${raw_name}_SSH_PASSWORD" | tr '[:lower:]' '[:upper:]' | sed 's/[^A-Z0-9_]/_/g; s/^[0-9]/_&/'
+        }
+
+        decrypt_env_value() {
+          decrypt_key="$1"
+          [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || return 0
+          [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || return 0
+
+          temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
+          if ! SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
+            rm -f "$temp_plain"
+            return 0
+          fi
+
+          chmod 600 "$temp_plain"
+          awk -F= -v key="$decrypt_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$temp_plain"
+          rm -f "$temp_plain"
+        }
+
+        encrypted_dotenv_upsert() {
+          secret_key="$1"
+          secret_value="$2"
+          temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
+          temp_next="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords-next.XXXXXX')"
+
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain"
+          chmod 600 "$temp_plain"
+
+          if grep -Eq "^${secret_key}=" "$temp_plain"; then
+            awk -v key="$secret_key" -v value="$secret_value" 'BEGIN {FS=OFS="="} $1 == key {$0 = key "=" value} {print}' "$temp_plain" > "$temp_next"
+            mv "$temp_next" "$temp_plain"
+          else
+            printf '%s=%s\n' "$secret_key" "$secret_value" >> "$temp_plain"
+          fi
+
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --encrypt --age "$(cat '{{.SOPS_AGE_RECIPIENTS_FILE}}')" --filename-override '{{.PASSWORDS_ENCRYPTED_FILE}}' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENCRYPTED_FILE}}'
+          chmod 600 '{{.PASSWORDS_ENCRYPTED_FILE}}'
+          rm -f "$temp_plain" "$temp_next"
+        }
+
+        mkdir -p '{{.PROXMOX_TMP_DIR}}'
+        chmod 700 '{{.PROXMOX_TMP_DIR}}'
+
+        [ -f '{{.CONFIG_ENV_FILE}}' ] || { echo 'ERROR: Missing state/config/.env. Run ./install.sh first.' >&2; exit 1; }
+
+        existing_group="${PROXMOX_INVENTORY_GROUP:-$(get_env_value PROXMOX_INVENTORY_GROUP)}"
+        existing_hostname="${PROXMOX_INVENTORY_HOSTNAME:-$(get_env_value PROXMOX_INVENTORY_HOSTNAME)}"
+        existing_ssh_host="${PROXMOX_SSH_HOST:-$(get_env_value PROXMOX_SSH_HOST)}"
+        existing_host_ip="${PROXMOX_HOST_IP:-$(get_env_value PROXMOX_HOST_IP)}"
+        existing_ssh_port="${PROXMOX_SSH_PORT:-$(get_env_value PROXMOX_SSH_PORT)}"
+        existing_ssh_user="${PROXMOX_SSH_USER:-$(get_env_value PROXMOX_SSH_USER)}"
+        existing_vm_lxc_id="${PROXMOX_VM_LXC_ID:-$(get_env_value PROXMOX_VM_LXC_ID)}"
+        existing_mac_address="${PROXMOX_MAC_ADDRESS:-$(get_env_value PROXMOX_MAC_ADDRESS)}"
+        existing_password_var="${PROXMOX_SSH_PASSWORD_VAR:-$(get_env_value PROXMOX_SSH_PASSWORD_VAR)}"
+        existing_python_interpreter="${PROXMOX_PYTHON_INTERPRETER:-$(get_env_value PROXMOX_PYTHON_INTERPRETER)}"
+
+        existing_group="${existing_group:-proxmox}"
+        existing_ssh_host="${existing_ssh_host:-$existing_host_ip}"
+        existing_ssh_port="${existing_ssh_port:-22}"
+        existing_ssh_user="${existing_ssh_user:-root}"
+        existing_python_interpreter="${existing_python_interpreter:-auto_silent}"
+
+        if [ -n "$existing_hostname" ] && [ -n "$existing_ssh_host" ] && [ -n "$existing_ssh_user" ]; then
+          inventory_group="$existing_group"
+          inventory_hostname="$existing_hostname"
+          proxmox_ssh_host="$existing_ssh_host"
+          proxmox_ssh_port="$existing_ssh_port"
+          proxmox_ssh_user="$existing_ssh_user"
+          vm_lxc_id="$existing_vm_lxc_id"
+          mac_address="$existing_mac_address"
+          ssh_password_var="$existing_password_var"
+          python_interpreter="$existing_python_interpreter"
+
+          if [ -z "$ssh_password_var" ]; then
+            ssh_password_var="$(make_default_password_var "$inventory_hostname")"
+          elif ! printf '%s' "$ssh_password_var" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            repaired_password_var="$(make_default_password_var "$inventory_hostname")"
+            echo "WARNING: Existing PROXMOX_SSH_PASSWORD_VAR is invalid. Resetting it to ${repaired_password_var}." >&2
+            ssh_password_var="$repaired_password_var"
+          fi
+
+          ssh_password_value=''
+          if [ -n "$ssh_password_var" ]; then
+            existing_secret_value="$(decrypt_env_value "$ssh_password_var")"
+            if [ -z "$existing_secret_value" ]; then
+              ssh_password_value="$(prompt_secret "Proxmox SSH password value for ${ssh_password_var}, blank to only reference existing variable" false)"
+            else
+              echo "Encrypted SSH password already exists for ${ssh_password_var}. Reusing saved value."
+            fi
+          fi
+
+          echo 'Existing Proxmox host configuration found. Reusing saved values.'
+        else
+          inventory_group="$(prompt_value 'Proxmox inventory group' "$existing_group" true)"
+          inventory_hostname="$(prompt_value 'Proxmox inventory hostname' "$existing_hostname" true)"
+          proxmox_ssh_host="$(prompt_value 'Proxmox SSH IP or DNS name' "$existing_ssh_host" true)"
+          proxmox_ssh_port="$(prompt_value 'Proxmox SSH port' "$existing_ssh_port" true)"
+          proxmox_ssh_user="$(prompt_value 'Proxmox SSH user' "$existing_ssh_user" true)"
+          vm_lxc_id="$(prompt_value 'Proxmox VM/LXC ID metadata, blank for physical host' "$existing_vm_lxc_id" false)"
+          mac_address="$(prompt_value 'Proxmox MAC address metadata, blank if not needed' "$existing_mac_address" false)"
+          default_password_var="$existing_password_var"
+          if [ -z "$default_password_var" ]; then
+            default_password_var="$(make_default_password_var "$inventory_hostname")"
+          fi
+          ssh_password_var="$(prompt_value 'Proxmox SSH password variable, blank for key-only SSH' "$default_password_var" false)"
+          python_interpreter="$(prompt_value 'Proxmox Python interpreter' "$existing_python_interpreter" true)"
+
+          ssh_password_value=''
+          if [ -n "$ssh_password_var" ]; then
+            if ! printf '%s' "$ssh_password_var" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+              echo 'ERROR: SSH password variable must be a valid environment variable name.' >&2
+              exit 1
+            fi
+
+            existing_secret_value="$(decrypt_env_value "$ssh_password_var")"
+            if [ -z "$existing_secret_value" ]; then
+              ssh_password_value="$(prompt_secret "Proxmox SSH password value for ${ssh_password_var}, blank to skip" false)"
+            else
+              echo "Encrypted SSH password already exists for ${ssh_password_var}. Reusing saved value."
+            fi
+          fi
+        fi
+
+        if [ -n "$ssh_password_var" ] && ! printf '%s' "$ssh_password_var" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$'; then
+          echo 'ERROR: SSH password variable must be a valid environment variable name.' >&2
+          exit 1
+        fi
+
+        if [ -n "${ssh_password_value:-}" ]; then
+          encrypted_dotenv_upsert "$ssh_password_var" "$ssh_password_value"
+          echo "Stored encrypted SSH password value for ${ssh_password_var}."
+        fi
+
+        upsert_env_value PROXMOX_INVENTORY_GROUP "$inventory_group"
+        upsert_env_value PROXMOX_INVENTORY_HOSTNAME "$inventory_hostname"
+        upsert_env_value PROXMOX_SSH_HOST "$proxmox_ssh_host"
+        upsert_env_value PROXMOX_SSH_PORT "$proxmox_ssh_port"
+        upsert_env_value PROXMOX_SSH_USER "$proxmox_ssh_user"
+        upsert_env_value PROXMOX_HOST_IP "$proxmox_ssh_host"
+        upsert_env_value PROXMOX_PYTHON_INTERPRETER "$python_interpreter"
+
+        if [ -n "$vm_lxc_id" ]; then
+          upsert_env_value PROXMOX_VM_LXC_ID "$vm_lxc_id"
+        fi
+        if [ -n "$mac_address" ]; then
+          upsert_env_value PROXMOX_MAC_ADDRESS "$mac_address"
+        fi
+        if [ -n "$ssh_password_var" ]; then
+          upsert_env_value PROXMOX_SSH_PASSWORD_VAR "$ssh_password_var"
+        fi
+
+        task env_create:inventory:add:server \
+          INVENTORY_GROUP="$inventory_group" \
+          INVENTORY_HOSTNAME="$inventory_hostname" \
+          INVENTORY_ANSIBLE_HOST="$proxmox_ssh_host" \
+          INVENTORY_SSH_USER="$proxmox_ssh_user" \
+          INVENTORY_SSH_PORT="$proxmox_ssh_port" \
+          INVENTORY_VM_LXC_ID="$vm_lxc_id" \
+          INVENTORY_MAC_ADDRESS="$mac_address" \
+          INVENTORY_SSH_PASSWORD_VAR="$ssh_password_var" \
+          INVENTORY_PYTHON_INTERPRETER="$python_interpreter"
+
+        echo "Proxmox host configuration is ready for ${inventory_hostname} (${proxmox_ssh_user}@${proxmox_ssh_host}:${proxmox_ssh_port})."
+
+  api:ensure:
+    desc: Create or reconcile the Proxmox automation role, user, ACL, and API token
+    cmds:
+      - task: tools:check
+      - task: :passwords:encrypt
+      - task: :ssh:key:ensure
+      - task: host:configure
+      - task: :ssh:bootstrap
+      - task: api:apply
+        vars:
+          FORCE_RECYCLE: 'false'
+
+  api:recycle:
+    desc: Force recycle the Proxmox automation API token and update encrypted local state
+    cmds:
+      - task: tools:check
+      - task: :passwords:encrypt
+      - task: :ssh:key:ensure
+      - task: host:configure
+      - task: :ssh:bootstrap
+      - task: api:apply
+        vars:
+          FORCE_RECYCLE: 'true'
+
+  api:apply:
+    internal: true
+    desc: Internal Proxmox API identity reconciler
+    cmds:
+      - |
+        # ==============================================================================
+        # Task: api:apply
+        # Purpose:
+        #   Reconcile the remote Proxmox role, user, ACL, and API token, then store
+        #   homelab API token material in the encrypted homelab password file.
+        # ==============================================================================
+        set -euo pipefail
+
+        mkdir -p '{{.PROXMOX_TMP_DIR}}'
+        chmod 700 '{{.PROXMOX_TMP_DIR}}'
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        decrypt_env_value() {
+          decrypt_key="$1"
+          [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || return 0
+          [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || return 0
+
+          temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
+          if ! SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
+            rm -f "$temp_plain"
+            return 0
+          fi
+
+          chmod 600 "$temp_plain"
+          awk -F= -v key="$decrypt_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$temp_plain"
+          rm -f "$temp_plain"
+        }
+
+        encrypted_dotenv_upsert() {
+          secret_key="$1"
+          secret_value="$2"
+          temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
+          temp_next="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords-next.XXXXXX')"
+
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain"
+          chmod 600 "$temp_plain"
+
+          if grep -Eq "^${secret_key}=" "$temp_plain"; then
+            awk -v key="$secret_key" -v value="$secret_value" 'BEGIN {FS=OFS="="} $1 == key {$0 = key "=" value} {print}' "$temp_plain" > "$temp_next"
+            mv "$temp_next" "$temp_plain"
+          else
+            printf '%s=%s\n' "$secret_key" "$secret_value" >> "$temp_plain"
+          fi
+
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --encrypt --age "$(cat '{{.SOPS_AGE_RECIPIENTS_FILE}}')" --filename-override '{{.PASSWORDS_ENCRYPTED_FILE}}' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENCRYPTED_FILE}}'
+          chmod 600 '{{.PASSWORDS_ENCRYPTED_FILE}}'
+          rm -f "$temp_plain" "$temp_next"
+        }
+
+        shell_quote() {
+          printf "'"
+          printf '%s' "$1" | sed "s/'/'\\''/g"
+          printf "'"
+        }
+
+        [ -f '{{.CONFIG_ENV_FILE}}' ] || { echo 'ERROR: Missing state/config/.env. Run ./install.sh first.' >&2; exit 1; }
+        [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || { echo 'ERROR: Missing encrypted password file. Run task passwords:setup.' >&2; exit 1; }
+        [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || { echo 'ERROR: Missing SOPS age key. Run task passwords:setup.' >&2; exit 1; }
+        [ -f '{{.SOPS_AGE_RECIPIENTS_FILE}}' ] || { echo 'ERROR: Missing SOPS age recipient. Run task passwords:setup.' >&2; exit 1; }
+
+        proxmox_ssh_host="${PROXMOX_SSH_HOST:-$(get_env_value PROXMOX_SSH_HOST)}"
+        proxmox_ssh_port="${PROXMOX_SSH_PORT:-$(get_env_value PROXMOX_SSH_PORT)}"
+        proxmox_ssh_user="${PROXMOX_SSH_USER:-$(get_env_value PROXMOX_SSH_USER)}"
+        proxmox_host_ip="${PROXMOX_HOST_IP:-$(get_env_value PROXMOX_HOST_IP)}"
+        ssh_key_file="${HOMELAB_SSH_KEY_FILE:-$(get_env_value HOMELAB_SSH_KEY_FILE)}"
+        ssh_connect_timeout="${SSH_CONNECT_TIMEOUT:-$(get_env_value SSH_CONNECT_TIMEOUT)}"
+
+        proxmox_ssh_host="${proxmox_ssh_host:-$proxmox_host_ip}"
+        proxmox_ssh_port="${proxmox_ssh_port:-22}"
+        proxmox_ssh_user="${proxmox_ssh_user:-root}"
+        ssh_key_file="${ssh_key_file:-{{.SSH_KEY_FILE}}}"
+        ssh_connect_timeout="${ssh_connect_timeout:-5}"
+
+        [ -n "$proxmox_ssh_host" ] || { echo 'ERROR: PROXMOX_SSH_HOST or PROXMOX_HOST_IP is required in state/config/.env.' >&2; exit 1; }
+        [ -f "$ssh_key_file" ] || { echo "ERROR: SSH private key not found: ${ssh_key_file}" >&2; exit 1; }
+
+        pve_user='{{.PVE_AUTOMATION_USER}}'
+        pve_role='{{.PVE_AUTOMATION_ROLE}}'
+        pve_token_id='{{.PVE_AUTOMATION_TOKEN_ID}}'
+        pve_realm="${PVE_REALM:-$(get_env_value PVE_REALM)}"
+        pve_realm="${pve_realm:-{{.PVE_REALM}}}"
+        pve_privs='{{.PVE_AUTOMATION_PRIVS}}'
+        pve_userid="${pve_user}@${pve_realm}"
+        force_recycle='{{.FORCE_RECYCLE}}'
+
+        api_user_key="PROXMOX_API_USER_${pve_user}"
+        api_token_name_key="PROXMOX_API_TOKEN_NAME_${pve_user}"
+        api_token_value_key="PROXMOX_API_TOKEN_VALUE_${pve_user}"
+        api_token_key="PROXMOX_API_TOKEN_${pve_user}"
+
+        probe_remote_script="$(mktemp '{{.PROXMOX_TMP_DIR}}/probe.XXXXXX')"
+        token_remote_script="$(mktemp '{{.PROXMOX_TMP_DIR}}/token.XXXXXX')"
+        trap 'rm -f "$probe_remote_script" "$token_remote_script"' EXIT
+
+        {
+          printf '%s\n' '#!/usr/bin/env bash'
+          printf '%s\n' 'set -euo pipefail'
+          printf 'PVE_USER_NAME=%s\n' "$(shell_quote "$pve_user")"
+          printf 'PVE_ROLE_NAME=%s\n' "$(shell_quote "$pve_role")"
+          printf 'PVE_TOKEN_ID=%s\n' "$(shell_quote "$pve_token_id")"
+          printf 'PVE_ROLE_PRIVS=%s\n' "$(shell_quote "$pve_privs")"
+          printf 'PVE_REALM=%s\n' "$(shell_quote "$pve_realm")"
+          printf '%s\n' 'PVE_USERID="${PVE_USER_NAME}@${PVE_REALM}"'
+          printf '%s\n' 'command -v pveum >/dev/null 2>&1 || { echo "ERROR: pveum is not available on the remote host." >&2; exit 1; }'
+          printf '%s\n' 'command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is not available on the remote host." >&2; exit 1; }'
+          printf '%s\n' 'if ! pveum role modify "${PVE_ROLE_NAME}" -privs "${PVE_ROLE_PRIVS}" >/dev/null 2>&1; then'
+          printf '%s\n' '  pveum role add "${PVE_ROLE_NAME}" -privs "${PVE_ROLE_PRIVS}" >/dev/null'
+          printf '%s\n' 'fi'
+          printf '%s\n' "if ! pveum user list --output-format json | jq -e --arg userid \"\${PVE_USERID}\" '.[] | select(.userid == \$userid)' >/dev/null 2>&1; then"
+          printf '%s\n' '  pveum user add "${PVE_USERID}" >/dev/null'
+          printf '%s\n' 'fi'
+          printf '%s\n' 'pveum acl modify / --users "${PVE_USERID}" --roles "${PVE_ROLE_NAME}" >/dev/null'
+          printf '%s\n' 'REMOTE_TOKEN_PRESENT=no'
+          printf '%s\n' 'if pveum user token list "${PVE_USERID}" --output-format json >/dev/null 2>&1; then'
+          printf '%s\n' "  if pveum user token list \"\${PVE_USERID}\" --output-format json | jq -e --arg tokenid \"\${PVE_TOKEN_ID}\" '.[] | select(.tokenid == \$tokenid)' >/dev/null 2>&1; then"
+          printf '%s\n' '    REMOTE_TOKEN_PRESENT=yes'
+          printf '%s\n' '  fi'
+          printf '%s\n' 'fi'
+          printf '%s\n' 'printf "REMOTE_TOKEN_PRESENT=%s\n" "${REMOTE_TOKEN_PRESENT}"'
+        } > "$probe_remote_script"
+
+        echo "Reconciling Proxmox automation API identity on ${proxmox_ssh_user}@${proxmox_ssh_host}:${proxmox_ssh_port}."
+        probe_output="$(ssh \
+          -i "$ssh_key_file" \
+          -o BatchMode=yes \
+          -o StrictHostKeyChecking=accept-new \
+          -o ConnectTimeout="$ssh_connect_timeout" \
+          -p "$proxmox_ssh_port" \
+          "${proxmox_ssh_user}@${proxmox_ssh_host}" \
+          'bash -s' < "$probe_remote_script")"
+
+        remote_token_present="$(printf '%s\n' "$probe_output" | awk -F= '/^REMOTE_TOKEN_PRESENT=/{print $2}' | tail -n 1)"
+        local_token_value="$(decrypt_env_value "$api_token_value_key")"
+
+        if [ "$force_recycle" = 'false' ] && [ -n "$local_token_value" ] && [ "$remote_token_present" = 'yes' ]; then
+          echo 'Encrypted local token state and remote Proxmox token state are both present. Reusing existing token.'
+        else
+          {
+            printf '%s\n' '#!/usr/bin/env bash'
+            printf '%s\n' 'set -euo pipefail'
+            printf 'PVE_USER_NAME=%s\n' "$(shell_quote "$pve_user")"
+            printf 'PVE_TOKEN_ID=%s\n' "$(shell_quote "$pve_token_id")"
+            printf 'PVE_REALM=%s\n' "$(shell_quote "$pve_realm")"
+            printf '%s\n' 'PVE_USERID="${PVE_USER_NAME}@${PVE_REALM}"'
+            printf '%s\n' 'command -v pveum >/dev/null 2>&1 || { echo "ERROR: pveum is not available on the remote host." >&2; exit 1; }'
+            printf '%s\n' 'command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is not available on the remote host." >&2; exit 1; }'
+            printf '%s\n' 'if pveum user token list "${PVE_USERID}" --output-format json >/dev/null 2>&1; then'
+            printf '%s\n' "  if pveum user token list \"\${PVE_USERID}\" --output-format json | jq -e --arg tokenid \"\${PVE_TOKEN_ID}\" '.[] | select(.tokenid == \$tokenid)' >/dev/null 2>&1; then"
+            printf '%s\n' '    pveum user token remove "${PVE_USERID}" "${PVE_TOKEN_ID}" >/dev/null 2>&1 || true'
+            printf '%s\n' '  fi'
+            printf '%s\n' 'fi'
+            printf '%s\n' 'pveum user token add "${PVE_USERID}" "${PVE_TOKEN_ID}" --privsep 0 --output-format json'
+          } > "$token_remote_script"
+
+          token_json="$(ssh \
+            -i "$ssh_key_file" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout="$ssh_connect_timeout" \
+            -p "$proxmox_ssh_port" \
+            "${proxmox_ssh_user}@${proxmox_ssh_host}" \
+            'bash -s' < "$token_remote_script")"
+
+          local_token_value="$(printf '%s\n' "$token_json" | jq -r '.value // empty')"
+          [ -n "$local_token_value" ] || { echo 'ERROR: Failed to capture the Proxmox token value from command output.' >&2; exit 1; }
+          echo 'Created a fresh Proxmox automation API token and captured it into encrypted local state.'
+        fi
+
+        full_token="${pve_userid}!${pve_token_id}=${local_token_value}"
+        encrypted_dotenv_upsert "$api_user_key" "$pve_userid"
+        encrypted_dotenv_upsert "$api_token_name_key" "${pve_userid}!${pve_token_id}"
+        encrypted_dotenv_upsert "$api_token_value_key" "$local_token_value"
+        encrypted_dotenv_upsert "$api_token_key" "$full_token"
+
+        echo "Stored encrypted Proxmox automation API token material for ${pve_userid}."
+
+  api:report:
+    desc: Show Proxmox automation API bootstrap status without printing secrets
+    cmds:
+      - |
+        set -euo pipefail
+
+        get_env_value() {
+          env_key="$1"
+          if [ -f '{{.CONFIG_ENV_FILE}}' ]; then
+            awk -F= -v key="$env_key" '$1 == key { sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit }' '{{.CONFIG_ENV_FILE}}'
+          fi
+        }
+
+        decrypt_env_value() {
+          decrypt_key="$1"
+          [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || return 0
+          [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || return 0
+          temp_plain="$(mktemp)"
+          if ! SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
+            rm -f "$temp_plain"
+            return 0
+          fi
+          awk -F= -v key="$decrypt_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$temp_plain"
+          rm -f "$temp_plain"
+        }
+
+        pve_user='{{.PVE_AUTOMATION_USER}}'
+        pve_token_id='{{.PVE_AUTOMATION_TOKEN_ID}}'
+        pve_realm="${PVE_REALM:-$(get_env_value PVE_REALM)}"
+        pve_realm="${pve_realm:-{{.PVE_REALM}}}"
+
+        api_user_key="PROXMOX_API_USER_${pve_user}"
+        api_token_name_key="PROXMOX_API_TOKEN_NAME_${pve_user}"
+        api_token_value_key="PROXMOX_API_TOKEN_VALUE_${pve_user}"
+        api_token_key="PROXMOX_API_TOKEN_${pve_user}"
+
+        api_user_present='no'
+        api_token_name_present='no'
+        api_token_value_present='no'
+        api_token_present='no'
+
+        [ -n "$(decrypt_env_value "$api_user_key")" ] && api_user_present='yes'
+        [ -n "$(decrypt_env_value "$api_token_name_key")" ] && api_token_name_present='yes'
+        [ -n "$(decrypt_env_value "$api_token_value_key")" ] && api_token_value_present='yes'
+        [ -n "$(decrypt_env_value "$api_token_key")" ] && api_token_present='yes'
+
+        cat <<EOREPORT
+        Proxmox automation API status
+        ----------------------------
+        Config file:                  {{.CONFIG_ENV_FILE}}
+        Encrypted secrets file:       {{.PASSWORDS_ENCRYPTED_FILE}}
+        API user:                     ${pve_user}@${pve_realm}
+        API token id:                 ${pve_token_id}
+        Encrypted API user present:   ${api_user_present}
+        Encrypted token name present: ${api_token_name_present}
+        Encrypted token value present:${api_token_value_present}
+        Encrypted full token present: ${api_token_present}
+        EOREPORT
