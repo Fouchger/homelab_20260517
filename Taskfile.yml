@@ -237,19 +237,7 @@ tasks:
         Proxmox helper scripts
         --------------------------------------------------------------
         task proxmox_scripts:code-server:install -> Install code-server using the reviewed static repo script.
-        task proxmox_scripts:community:list      -> List reusable Proxmox Community Script wrappers supported
-                                            by this repo.
-        task proxmox_scripts:community:init      -> Create a reusable Proxmox Community Script config if it
-                                            does not exist.
-        task proxmox_scripts:community:configure -> Interactively configure reusable Advanced Install variables
-                                            for a Proxmox Community Script.
-        task proxmox_scripts:community:plan      -> Show planned Proxmox Community Script LXC creation runs
-                                            without creating anything.
-        task proxmox_scripts:community:run       -> Create LXCs through Proxmox Community Scripts and update
-                                            inventory after successful creation.
-        task proxmox_scripts:community:audit     -> Show Proxmox Community Script wrapper config status.
-
-
+        
         --------------------------------------------------------------
         Advanced and high-risk operations
         --------------------------------------------------------------
