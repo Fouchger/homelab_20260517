@@ -160,6 +160,10 @@ tasks:
 
         CONFIG_ENV_FILE="{{.CONFIG_ENV_FILE}}" \
           LXC_CONFIG_FILE="$config_path" \
+          INVENTORY_MANAGER_SCRIPT="{{.ROOT_DIR}}/{{.INVENTORY_MANAGER_SCRIPT}}" \
+          ANSIBLE_INVENTORY_FILE="{{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}" \
+          PASSWORDS_ENCRYPTED_FILE="{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          SOPS_AGE_RECIPIENTS_FILE="{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}" \
           "$script_path"
 
   technitiumdns:ensure:
@@ -191,4 +195,8 @@ tasks:
 
         CONFIG_ENV_FILE="{{.CONFIG_ENV_FILE}}" \
           LXC_CONFIG_FILE="$config_path" \
+          INVENTORY_MANAGER_SCRIPT="{{.ROOT_DIR}}/{{.INVENTORY_MANAGER_SCRIPT}}" \
+          ANSIBLE_INVENTORY_FILE="{{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}" \
+          PASSWORDS_ENCRYPTED_FILE="{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          SOPS_AGE_RECIPIENTS_FILE="{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}" \
           "$script_path" "technitiumdns.sh"

@@ -25,6 +25,11 @@ DEFAULT_SSH_USER="root"
 DEFAULT_SSH_KEY_FILE="${HOME}/.ssh/homelab_ed25519"
 REMOTE_CONFIG_FILE=""
 REMOTE_SCRIPT_FILE=""
+INVENTORY_MANAGER_SCRIPT="${INVENTORY_MANAGER_SCRIPT:-scripts/lib/inventory-manager.py}"
+ANSIBLE_INVENTORY_FILE="${ANSIBLE_INVENTORY_FILE:-state/ansible/inventory.yml}"
+PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:-state/secrets/passwords/passwords.enc.env}"
+SOPS_AGE_RECIPIENTS_FILE="${SOPS_AGE_RECIPIENTS_FILE:-state/secrets/sops/recipients.txt}"
+HOMELAB_LXC_INVENTORY_GROUP="${HOMELAB_LXC_INVENTORY_GROUP:-lxc}"
 
 get_env_value() {
   local env_key="$1"
@@ -60,6 +65,7 @@ cleanup_remote_files() {
 
 require_command ssh
 require_command scp
+require_command python3
 
 PROXMOX_SSH_HOST="${PROXMOX_SSH_HOST:-$(get_env_value PROXMOX_SSH_HOST)}"
 PROXMOX_SSH_PORT="${PROXMOX_SSH_PORT:-$(get_env_value PROXMOX_SSH_PORT)}"
@@ -155,6 +161,43 @@ ct_exists() {
   fi
 
   [[ -f "/etc/pve/lxc/${ctid}.conf" || -f "/etc/pve/qemu-server/${ctid}.conf" ]]
+}
+
+strip_cidr() {
+  local value="$1"
+  printf '%s' "${value%%/*}"
+}
+
+normalise_inventory_group() {
+  local script_name="$1"
+  script_name="${script_name%.sh}"
+  script_name="${script_name//[^A-Za-z0-9_.-]/_}"
+  printf '%s' "${script_name:-lxc}"
+}
+
+collect_lxc_manifest() {
+  local script_name="$1"
+  local instance_name="$2"
+  local -n instance_vars_ref="$3"
+  local ctid="${instance_vars_ref[var_ctid]:-}"
+  local hostname="${instance_vars_ref[var_hostname]:-$instance_name}"
+  local ansible_host="${instance_vars_ref[var_net]:-}"
+  local mac_address="${instance_vars_ref[var_mac]:-}"
+  local group_name
+
+  group_name="$(normalise_inventory_group "$script_name")"
+  ansible_host="$(strip_cidr "$ansible_host")"
+
+  if [[ -z "$ansible_host" && -n "$ctid" ]]; then
+    ansible_host="$(pct exec "$ctid" -- hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  fi
+
+  if [[ -z "$ansible_host" ]]; then
+    echo "WARNING: Unable to determine IP address for CT ${ctid} (${hostname}); inventory was not emitted for this container." >&2
+    return 0
+  fi
+
+  printf 'HOMELAB_LXC_INVENTORY\t%s\t%s\t%s\t%s\t%s\t%s\n' "$group_name" "$hostname" "$ansible_host" "root" "$ctid" "$mac_address"
 }
 
 parse_lxc_config() {
@@ -256,6 +299,7 @@ while IFS=$'\t' read -r script_name instance_name var_key var_value; do
   next_key="${script_name}/${instance_name}"
   if [[ -n "$current_key" && "$next_key" != "$current_key" ]]; then
     run_instance "${current_key%%/*}" "${current_key#*/}" current_vars
+    collect_lxc_manifest "${current_key%%/*}" "${current_key#*/}" current_vars
     created_ctids+=("${current_vars[var_ctid]:-}")
     current_vars=()
   fi
@@ -266,6 +310,7 @@ done < <(parse_lxc_config)
 
 if [[ -n "$current_key" ]]; then
   run_instance "${current_key%%/*}" "${current_key#*/}" current_vars
+  collect_lxc_manifest "${current_key%%/*}" "${current_key#*/}" current_vars
   created_ctids+=("${current_vars[var_ctid]:-}")
 fi
 
@@ -282,6 +327,50 @@ printf '\nCurrent matching CTs:\n'
 pct list | awk -v ids=" ${created_ctids[*]} " 'NR == 1 || index(ids, " " $1 " ") > 0'
 REMOTE_SCRIPT
 
+sync_lxc_inventory() {
+  local output_file="$1"
+  local changed=0
+  local group hostname ansible_host ssh_user ctid mac_address
+
+  if [[ ! -f "$INVENTORY_MANAGER_SCRIPT" ]]; then
+    echo "WARNING: Inventory manager script was not found: ${INVENTORY_MANAGER_SCRIPT}" >&2
+    echo "         LXC containers were ensured, but inventory was not updated." >&2
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$ANSIBLE_INVENTORY_FILE")"
+
+  while IFS=$'\t' read -r marker group hostname ansible_host ssh_user ctid mac_address; do
+    [[ "$marker" == "HOMELAB_LXC_INVENTORY" ]] || continue
+    group="${group:-lxc}"
+    ssh_user="${ssh_user:-root}"
+
+    echo "Updating Ansible inventory for ${hostname} (${ansible_host})..."
+    python3 -S "$INVENTORY_MANAGER_SCRIPT" add-server \
+      --inventory-file "$ANSIBLE_INVENTORY_FILE" \
+      --password-file "$PASSWORDS_ENCRYPTED_FILE" \
+      --recipients-file "$SOPS_AGE_RECIPIENTS_FILE" \
+      --group "$group" \
+      --hostname "$hostname" \
+      --ansible-host "$ansible_host" \
+      --ssh-user "$ssh_user" \
+      --vm-lxc-id "$ctid" \
+      --mac-address "$mac_address" \
+      --ssh-port "22" \
+      --python-interpreter "auto_silent" \
+      --no-password-var
+    changed=$((changed + 1))
+  done < <(tr -d '\r' < "$output_file" | grep '^HOMELAB_LXC_INVENTORY' || true)
+
+  if [[ "$changed" -eq 0 ]]; then
+    echo "WARNING: No LXC inventory manifest lines were returned by the Proxmox run." >&2
+    echo "         LXC containers were ensured, but inventory was not updated." >&2
+    return 0
+  fi
+
+  echo "Updated Ansible inventory for ${changed} LXC container(s): ${ANSIBLE_INVENTORY_FILE}"
+}
+
 chmod 700 "$local_remote_script"
 
 echo "Copying LXC config to ${remote_target}..."
@@ -290,5 +379,10 @@ scp "${scp_options[@]}" "$local_remote_script" "${remote_target}:${REMOTE_SCRIPT
 
 echo "Ensuring Proxmox community-script LXC containers on ${remote_target}..."
 
+local_ssh_output="$(mktemp)"
+trap 'rm -f "$local_remote_script" "$local_ssh_output"; cleanup_remote_files' EXIT
+
 ssh -tt "${ssh_options[@]}" "$remote_target" \
-  "export TERM=\"${TERM:-xterm}\"; LXC_CONFIG_FILE='${REMOTE_CONFIG_FILE}' LXC_SCRIPT_FILTER='${LXC_SCRIPT_FILTER}' bash '${REMOTE_SCRIPT_FILE}'"
+  "export TERM=\"${TERM:-xterm}\"; LXC_CONFIG_FILE='${REMOTE_CONFIG_FILE}' LXC_SCRIPT_FILTER='${LXC_SCRIPT_FILTER}' bash '${REMOTE_SCRIPT_FILE}'" | tee "$local_ssh_output"
+
+sync_lxc_inventory "$local_ssh_output"

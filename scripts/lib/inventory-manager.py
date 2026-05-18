@@ -426,7 +426,7 @@ def add_servers(args: argparse.Namespace, interactive: bool) -> None:
         first_ansible_host = args.ansible_host or args.hostname
         first_mac_address = args.mac_address or ''
         ssh_user = args.ssh_user
-        first_ssh_password_var = args.ssh_password_var or env_var_from_hostname(first_hostname)
+        first_ssh_password_var = '' if args.no_password_var else (args.ssh_password_var or env_var_from_hostname(first_hostname))
         first_ssh_password_value = ''
         python_interpreter = args.python_interpreter or 'auto_silent'
         ssh_port = args.ssh_port or '22'
@@ -659,6 +659,7 @@ def main() -> int:
     add_parser.add_argument('--vm-lxc-id', default='')
     add_parser.add_argument('--mac-address', default='')
     add_parser.add_argument('--ssh-password-var', default='')
+    add_parser.add_argument('--no-password-var', action='store_true')
     add_parser.add_argument('--python-interpreter', default='auto_silent')
     add_parser.add_argument('--ssh-port', default='22')
 

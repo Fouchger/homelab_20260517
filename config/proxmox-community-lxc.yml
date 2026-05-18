@@ -26,6 +26,7 @@ technitiumdns.sh:
     var_container_storage: "local-lvm"
     var_template_storage: "local"
     var_ssh_authorized_key: auto
+    var_pw: 121514
 
   dns02:
     var_ctid: "21002"
@@ -42,3 +43,4 @@ technitiumdns.sh:
     var_container_storage: "local-lvm"
     var_template_storage: "local"
     var_ssh_authorized_key: auto
+    var_pw: 121514
