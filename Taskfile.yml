@@ -255,6 +255,7 @@ tasks:
       - task: homelab:bootstrap
       - task: homelab:configure
       - task: homelab:validate
+      - task: homelab:lxc_creation
 
   homelab:bootstrap:
     desc: Prepare local control-plane tooling, encrypted secrets, GitHub access, and the SSH key only.
@@ -296,6 +297,12 @@ tasks:
         # shellcheck source=/dev/null
         source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
         print_section_header "Homelab setup is complete. Enjoy!" "GREEN"
+
+  homelab:lxc_creation:
+    desc: 
+    cmds:
+      - task: proxmox_scripts:technitiumdns:ensure
+    
 
   ci:
     desc: Run safe static validation checks for shell, Python, and YAML files.

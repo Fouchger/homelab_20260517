@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# File: scripts/lib/proxmox-ensure-community-lxc.sh
+# File: services/proxmox_helper_scripts/proxmox-ensure-community-lxc.sh
 # Purpose:
 #   From the admin server, connect to the Proxmox host and ensure one or more LXC
 #   containers exist by running Proxmox community scripts on the Proxmox host.
@@ -24,6 +24,7 @@ DEFAULT_SSH_PORT="22"
 DEFAULT_SSH_USER="root"
 DEFAULT_SSH_KEY_FILE="${HOME}/.ssh/homelab_ed25519"
 REMOTE_CONFIG_FILE=""
+REMOTE_SCRIPT_FILE=""
 
 get_env_value() {
   local env_key="$1"
@@ -49,9 +50,11 @@ require_value() {
   fi
 }
 
-cleanup_remote_config() {
-  if [[ -n "${REMOTE_CONFIG_FILE}" && -n "${remote_target:-}" ]]; then
-    ssh "${ssh_options[@]}" "$remote_target" "rm -f '${REMOTE_CONFIG_FILE}'" >/dev/null 2>&1 || true
+cleanup_remote_files() {
+  if [[ -n "${remote_target:-}" ]]; then
+    if [[ -n "${REMOTE_CONFIG_FILE}" || -n "${REMOTE_SCRIPT_FILE}" ]]; then
+      ssh "${ssh_options[@]}" "$remote_target" "rm -f '${REMOTE_CONFIG_FILE}' '${REMOTE_SCRIPT_FILE}'" >/dev/null 2>&1 || true
+    fi
   fi
 }
 
@@ -88,18 +91,23 @@ ssh_options=(
   -o StrictHostKeyChecking=accept-new
 )
 
+scp_options=(
+  -P "$PROXMOX_SSH_PORT"
+  -i "$HOMELAB_SSH_KEY_FILE"
+  -o BatchMode=yes
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=accept-new
+)
+
 remote_target="${PROXMOX_SSH_USER}@${PROXMOX_SSH_HOST}"
 REMOTE_CONFIG_FILE="/tmp/homelab-proxmox-community-lxc-$RANDOM-$$.yml"
-trap cleanup_remote_config EXIT
+REMOTE_SCRIPT_FILE="/tmp/homelab-proxmox-community-lxc-$RANDOM-$$.sh"
+local_remote_script="$(mktemp)"
+trap 'rm -f "$local_remote_script"; cleanup_remote_files' EXIT
 
-echo "Copying LXC config to ${remote_target}..."
-scp "${ssh_options[@]}" "$LXC_CONFIG_FILE" "${remote_target}:${REMOTE_CONFIG_FILE}" >/dev/null
-
-echo "Ensuring Proxmox community-script LXC containers on ${remote_target}..."
-
-ssh "${ssh_options[@]}" "$remote_target" \
-  "LXC_CONFIG_FILE='${REMOTE_CONFIG_FILE}' LXC_SCRIPT_FILTER='${LXC_SCRIPT_FILTER}' bash -s" <<'REMOTE_SCRIPT'
+cat >"$local_remote_script" <<'REMOTE_SCRIPT'
 set -euo pipefail
+export TERM="${TERM:-xterm}"
 
 COMMUNITY_SCRIPT_BASE_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct"
 LXC_CONFIG_FILE="${LXC_CONFIG_FILE:?LXC_CONFIG_FILE is required}"
@@ -187,7 +195,7 @@ run_instance() {
   local ctid="${instance_vars_ref[var_ctid]:-}"
   local hostname="${instance_vars_ref[var_hostname]:-$instance_name}"
   local script_url="${COMMUNITY_SCRIPT_BASE_URL}/${script_name}"
-  local env_cmd=(env)
+  local env_cmd=(env "TERM=${TERM:-xterm}")
   local key value
 
   if [[ -z "$ctid" ]]; then
@@ -273,3 +281,14 @@ fi
 printf '\nCurrent matching CTs:\n'
 pct list | awk -v ids=" ${created_ctids[*]} " 'NR == 1 || index(ids, " " $1 " ") > 0'
 REMOTE_SCRIPT
+
+chmod 700 "$local_remote_script"
+
+echo "Copying LXC config to ${remote_target}..."
+scp "${scp_options[@]}" "$LXC_CONFIG_FILE" "${remote_target}:${REMOTE_CONFIG_FILE}" >/dev/null
+scp "${scp_options[@]}" "$local_remote_script" "${remote_target}:${REMOTE_SCRIPT_FILE}" >/dev/null
+
+echo "Ensuring Proxmox community-script LXC containers on ${remote_target}..."
+
+ssh -tt "${ssh_options[@]}" "$remote_target" \
+  "export TERM=\"${TERM:-xterm}\"; LXC_CONFIG_FILE='${REMOTE_CONFIG_FILE}' LXC_SCRIPT_FILTER='${LXC_SCRIPT_FILTER}' bash '${REMOTE_SCRIPT_FILE}'"
