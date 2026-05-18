@@ -1,0 +1,54 @@
+---
+# ==============================================================================
+# File: ansible/technitium/group_vars/technitiumdns.yml
+# Purpose:
+#   Non-secret Technitium DNS enterprise baseline variables.
+# Notes:
+#   - Secrets are supplied from state/secrets/passwords/passwords.enc.env at run time.
+#   - Cloudflare remains authoritative for public DNS; Technitium serves internal DNS.
+# ==============================================================================
+
+technitium_web_port: 5380
+technitium_api_scheme: http
+technitium_admin_user: "{{ technitium_admin_user_secret | default('admin') }}"
+technitium_initial_password: "{{ technitium_initial_password_secret }}"
+technitium_admin_password: "{{ technitium_admin_password_secret }}"
+
+technitium_primary_host: dns01
+technitium_secondary_host: dns02
+technitium_primary_ip: 192.168.30.2
+technitium_secondary_ip: 192.168.30.3
+technitium_primary_zone_type: Primary
+technitium_secondary_zone_type: Secondary
+
+technitium_mgmt_network: 192.168.20.0/24
+technitium_allowed_client_networks:
+  - 192.168.20.0/24
+  - 192.168.30.0/24
+  - 192.168.40.0/24
+  - 192.168.50.0/24
+  - 192.168.60.0/24
+  - 192.168.70.0/24
+  - 192.168.90.0/24
+
+technitium_forwarders:
+  - "https://cloudflare-dns.com/dns-query"
+
+technitium_zones:
+  - name: fouchger.uk
+  - name: labcore.uk
+  - name: 30.168.192.in-addr.arpa
+
+technitium_a_records:
+  - { zone: fouchger.uk, name: dns01.fouchger.uk, ip: 192.168.30.2, ttl: 3600 }
+  - { zone: fouchger.uk, name: dns02.fouchger.uk, ip: 192.168.30.3, ttl: 3600 }
+  - { zone: fouchger.uk, name: router.fouchger.uk, ip: 192.168.20.1, ttl: 3600 }
+  - { zone: fouchger.uk, name: pve01.fouchger.uk, ip: 192.168.20.10, ttl: 3600 }
+  - { zone: fouchger.uk, name: proxmox.fouchger.uk, ip: 192.168.20.10, ttl: 3600 }
+  - { zone: labcore.uk, name: dns01.labcore.uk, ip: 192.168.30.2, ttl: 3600 }
+  - { zone: labcore.uk, name: dns02.labcore.uk, ip: 192.168.30.3, ttl: 3600 }
+
+technitium_ptr_records:
+  - { zone: 30.168.192.in-addr.arpa, name: 2.30.168.192.in-addr.arpa, ptr: dns01.fouchger.uk, ttl: 3600 }
+  - { zone: 30.168.192.in-addr.arpa, name: 3.30.168.192.in-addr.arpa, ptr: dns02.fouchger.uk, ttl: 3600 }
+  - { zone: 30.168.192.in-addr.arpa, name: 10.30.168.192.in-addr.arpa, ptr: proxmox.fouchger.uk, ttl: 3600 }

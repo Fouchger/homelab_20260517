@@ -80,6 +80,9 @@ vars:
   PROXMOX_HOST_IP_KEY: PROXMOX_HOST_IP
   PROXMOX_API_URL_KEY: PROXMOX_API_URL
 
+  # Technitium DNS Ansible paths
+  TECHNITIUM_ANSIBLE_DIR: ansible/technitium
+  TECHNITIUM_ANSIBLE_PLAYBOOK: '{{.TECHNITIUM_ANSIBLE_DIR}}/playbooks/site.yml'
 includes:
   passwords: ./taskfile/passwords.Taskfile.yml
   github: ./taskfile/github.Taskfile.yml
@@ -89,6 +92,7 @@ includes:
   health: ./taskfile/health.Taskfile.yml
   proxmox: ./taskfile/proxmox.Taskfile.yml
   proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
+  technitium: ./taskfile/technitium.Taskfile.yml
 
 tasks:
   default:
@@ -302,6 +306,7 @@ tasks:
     desc: 
     cmds:
       - task: proxmox_scripts:technitiumdns:ensure
+      - task: technitium:setup
     
 
   ci:

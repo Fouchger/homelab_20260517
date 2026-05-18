@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# ==============================================================================
+# Technitium DNS tasks
+# ==============================================================================
+# Purpose:
+#   Wire the Technitium DNS Ansible baseline into the homelab operational model.
+# Notes:
+#   - Non-secret DNS defaults live under ansible/technitium/group_vars.
+#   - Credentials are stored only in the encrypted SOPS password file.
+# ==============================================================================
+
+version: '3'
+
+tasks:
+  default:
+    desc: Show available Technitium DNS tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show Technitium DNS tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  help:
+    desc: Show Technitium DNS task help
+    cmds:
+      - |
+        set -euo pipefail
+        cat <<'EOHELP'
+        Technitium DNS task help
+
+        Routine flow
+          task technitium:setup
+            Ensure the LXCs exist, sync inventory, prompt for credentials, and run the DNS playbook.
+
+          task technitium:configure
+            Run the DNS playbook using encrypted credentials already stored in SOPS.
+
+        Setup helpers
+          task technitium:inventory:sync
+            Sync dns01 and dns02 from config/proxmox-community-lxc.yml into state/ansible/inventory.yml.
+
+          task technitium:credentials
+            Prompt for the current Technitium password and new production password, then store them in SOPS.
+
+        Validation
+          task technitium:validate
+            Validate local inventory and required Ansible files before a configure run.
+        EOHELP
+
+  setup:
+    desc: Ensure Technitium LXCs, sync inventory, prompt credentials, and configure DNS.
+    cmds:
+      - task: :proxmox_scripts:technitiumdns:ensure
+      - task: inventory:sync
+      - task: credentials
+      - task: configure
+
+  validate:
+    desc: Validate Technitium Ansible files and inventory prerequisites.
+    cmds:
+      - |
+        set -euo pipefail
+
+        required_files="
+        {{.ANSIBLE_INVENTORY_FILE}}
+        ansible/technitium/playbooks/site.yml
+        ansible/technitium/group_vars/technitiumdns.yml
+        scripts/lib/technitium-run-playbook.sh
+        scripts/lib/technitium-credentials.sh
+        scripts/lib/technitium-inventory-sync.py
+        "
+
+        for required_file in $required_files; do
+          if [[ ! -f "$required_file" ]]; then
+            echo "ERROR: Missing required file: ${required_file}" >&2
+            exit 1
+          fi
+        done
+
+        python3 - <<'PYVALIDATE'
+        import sys
+        from pathlib import Path
+
+        try:
+            import yaml
+        except ImportError:
+            print('ERROR: Python module PyYAML is required for inventory validation.', file=sys.stderr)
+            sys.exit(1)
+
+        inventory_file = Path('{{.ANSIBLE_INVENTORY_FILE}}')
+        inventory = yaml.safe_load(inventory_file.read_text()) or {}
+
+        technitium_hosts = (
+            inventory.get('all', {})
+            .get('children', {})
+            .get('technitiumdns', {})
+            .get('hosts', {})
+        )
+
+        missing_hosts = [host for host in ('dns01', 'dns02') if host not in technitium_hosts]
+        if missing_hosts:
+            print(
+                'ERROR: Missing Technitium host(s) in inventory group technitiumdns: ' + ', '.join(missing_hosts),
+                file=sys.stderr,
+            )
+            print('Run: task technitium:inventory:sync', file=sys.stderr)
+            sys.exit(1)
+        PYVALIDATE
+
+        echo 'Technitium local validation completed successfully.'
+
+  inventory:sync:
+    desc: Sync Technitium DNS hosts from the LXC config into the homelab inventory.
+    deps:
+      - :env_create:inventory:init
+    cmds:
+      - |
+        set -euo pipefail
+        python3 '{{.ROOT_DIR}}/scripts/lib/technitium-inventory-sync.py' \
+          --config-file '{{.ROOT_DIR}}/{{.PROXMOX_COMMUNITY_LXC_CONFIG_FILE}}' \
+          --inventory-file '{{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}' \
+          --inventory-manager '{{.ROOT_DIR}}/{{.INVENTORY_MANAGER_SCRIPT}}' \
+          --password-file '{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
+          --recipients-file '{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}'
+
+  credentials:
+    desc: Prompt for Technitium credentials and store them in the encrypted SOPS password file.
+    deps:
+      - :passwords:encrypt
+    cmds:
+      - |
+        set -euo pipefail
+        PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
+          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
+          '{{.ROOT_DIR}}/scripts/lib/technitium-credentials.sh'
+
+  configure:
+    desc: Run the Technitium DNS Ansible enterprise baseline.
+    deps:
+      - validate
+    cmds:
+      - |
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
+          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          ANSIBLE_INVENTORY_FILE='{{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}' \
+          '{{.ROOT_DIR}}/scripts/lib/technitium-run-playbook.sh'

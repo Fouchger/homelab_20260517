@@ -76,6 +76,40 @@ Runtime plaintext files are temporary and should be removed with:
 task passwords:cleanup
 ```
 
+
+## Technitium DNS automation
+
+The repository now includes a Technitium DNS Ansible baseline wired into the existing Taskfile, inventory, and SOPS secrets model.
+
+```bash
+task technitium:setup
+```
+
+That flow ensures the Technitium LXCs exist, syncs `dns01` and `dns02` into `state/ansible/inventory.yml`, prompts for the Technitium initial/current password and new production password, stores those values in `state/secrets/passwords/passwords.enc.env`, and runs the Ansible playbook.
+
+Individual tasks are also available:
+
+```bash
+task technitium:inventory:sync
+task technitium:credentials
+task technitium:configure
+task technitium:validate
+```
+
+Non-secret DNS settings live in:
+
+```text
+ansible/technitium/group_vars/technitiumdns.yml
+```
+
+Secrets are not committed. The following keys are stored in the encrypted SOPS dotenv file when `task technitium:credentials` is run:
+
+```text
+TECHNITIUM_ADMIN_USER
+TECHNITIUM_INITIAL_PASSWORD
+TECHNITIUM_ADMIN_PASSWORD
+```
+
 ## Health and validation
 
 ```bash
