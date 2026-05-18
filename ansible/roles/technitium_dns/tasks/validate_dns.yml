@@ -1,0 +1,18 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/validate_dns.yml
+# Purpose:
+#   Validate DNS behaviour after Technitium configuration.
+# ==============================================================================
+
+- name: Validate primary resolves dns01
+  ansible.builtin.command: "dig @{{ technitium_primary_ip }} dns01.fouchger.uk +short"
+  register: dig_primary
+  changed_when: false
+  failed_when: "'192.168.30.2' not in dig_primary.stdout"
+
+- name: Validate secondary resolves dns01
+  ansible.builtin.command: "dig @{{ technitium_secondary_ip }} dns01.fouchger.uk +short"
+  register: dig_secondary
+  changed_when: false
+  failed_when: "'192.168.30.2' not in dig_secondary.stdout"

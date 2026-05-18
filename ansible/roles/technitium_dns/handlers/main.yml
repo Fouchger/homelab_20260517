@@ -1,0 +1,10 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/handlers/main.yml
+# Purpose:
+#   Handlers for the Technitium DNS role.
+# ==============================================================================
+
+- name: Reload ufw
+  ansible.builtin.command: ufw reload
+  changed_when: false

@@ -130,7 +130,7 @@ fi
 } > "$extra_vars_file"
 chmod 600 "$extra_vars_file"
 
-ANSIBLE_HOST_KEY_CHECKING=True ansible-playbook \
+ANSIBLE_HOST_KEY_CHECKING=True ANSIBLE_ROLES_PATH="$ROOT_DIR/ansible/roles" ansible-playbook \
   -i "$ANSIBLE_INVENTORY_FILE" \
-  "$ROOT_DIR/ansible/technitium/playbooks/site.yml" \
+  "$ROOT_DIR/ansible/playbooks/technitium.yml" \
   --extra-vars "@$extra_vars_file"

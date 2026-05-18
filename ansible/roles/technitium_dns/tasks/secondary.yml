@@ -1,0 +1,50 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/secondary.yml
+# Purpose:
+#   Configure Technitium secondary zones that transfer from the primary server.
+# Notes:
+#   - Runs only on technitium_secondary_host.
+#   - API calls are delegated to localhost.
+# ==============================================================================
+
+- name: Set Technitium secondary API base URL
+  ansible.builtin.set_fact:
+    technitium_base_url: "{{ technitium_api_scheme }}://{{ ansible_host }}:{{ technitium_web_port }}"
+  when: inventory_hostname == technitium_secondary_host
+
+- name: Login to Technitium API on secondary
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/user/login"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      user: "{{ technitium_admin_user }}"
+      pass: "{{ technitium_admin_password }}"
+      includeInfo: "true"
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  register: technitium_login
+  when: inventory_hostname == technitium_secondary_host
+  no_log: true
+
+- name: Create secondary zones from primary
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/zones/create"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ technitium_login.json.token }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item.name }}"
+      type: "{{ technitium_secondary_zone_type }}"
+      primaryNameServerAddresses: "{{ technitium_primary_ip }}"
+      zoneTransferProtocol: Tcp
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  loop: "{{ technitium_zones }}"
+  when: inventory_hostname == technitium_secondary_host
+  failed_when: false
+  no_log: true

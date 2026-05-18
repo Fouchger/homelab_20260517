@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# File: /usr/local/sbin/technitium-backup.sh
+# Purpose:
+#   Create a retained local backup of Technitium DNS configuration.
+# Notes:
+#   - Installed by Ansible role technitium_dns.
+# ==============================================================================
+set -euo pipefail
+
+backup_directory="{{ technitium_backup_directory }}"
+retention_days="{{ technitium_backup_retention_days }}"
+stamp="$(date +%Y%m%d-%H%M%S)"
+archive="${backup_directory}/technitium-${HOSTNAME}-${stamp}.tar.gz"
+
+if [ -d /etc/dns ]; then
+  tar -czf "$archive" /etc/dns
+  find "$backup_directory" -type f -name 'technitium-*.tar.gz' -mtime "+${retention_days}" -delete
+fi

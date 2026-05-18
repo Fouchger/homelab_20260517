@@ -101,7 +101,14 @@ task technitium:validate
 Non-secret DNS settings live in:
 
 ```text
-ansible/technitium/group_vars/technitiumdns.yml
+ansible/group_vars/technitiumdns.yml
+```
+
+The Technitium playbook uses a role-based layout:
+
+```text
+ansible/playbooks/technitium.yml
+ansible/roles/technitium_dns/
 ```
 
 Secrets are not committed. The following keys are stored in the encrypted SOPS dotenv file when `task technitium:credentials` is run:

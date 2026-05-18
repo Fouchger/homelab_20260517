@@ -1,0 +1,91 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/technitium.yml
+# Purpose:
+#   Configure the Technitium DNS enterprise baseline for the homelab.
+# Notes:
+#   - Runtime inventory is generated at state/ansible/inventory.yml.
+#   - Secrets are supplied by scripts/lib/technitium-run-playbook.sh as extra vars.
+# ==============================================================================
+
+- name: Validate Technitium DNS input variables
+  hosts: technitiumdns
+  gather_facts: false
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  roles:
+    - role: technitium_dns
+      tags:
+        - technitium
+        - validate
+
+- name: Bootstrap Technitium admin password
+  hosts: technitiumdns
+  gather_facts: false
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  tasks:
+    - name: Run Technitium API bootstrap tasks
+      ansible.builtin.include_role:
+        name: technitium_dns
+        tasks_from: bootstrap.yml
+      tags:
+        - technitium
+        - bootstrap
+
+- name: Prepare Technitium DNS host baseline
+  hosts: technitiumdns
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  tasks:
+    - name: Run Technitium host baseline tasks
+      ansible.builtin.include_role:
+        name: technitium_dns
+        tasks_from: host_baseline.yml
+      tags:
+        - technitium
+        - host_baseline
+
+- name: Configure Technitium primary zones and records
+  hosts: technitiumdns
+  gather_facts: false
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  tasks:
+    - name: Run Technitium primary zone tasks
+      ansible.builtin.include_role:
+        name: technitium_dns
+        tasks_from: zones.yml
+      tags:
+        - technitium
+        - zones
+
+- name: Configure Technitium secondary zones
+  hosts: technitiumdns
+  gather_facts: false
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  tasks:
+    - name: Run Technitium secondary zone tasks
+      ansible.builtin.include_role:
+        name: technitium_dns
+        tasks_from: secondary.yml
+      tags:
+        - technitium
+        - secondary
+
+- name: Validate DNS service behaviour
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  tasks:
+    - name: Run Technitium DNS validation tasks
+      ansible.builtin.include_role:
+        name: technitium_dns
+        tasks_from: validate_dns.yml
+      tags:
+        - technitium
+        - validate

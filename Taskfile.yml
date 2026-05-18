@@ -81,8 +81,8 @@ vars:
   PROXMOX_API_URL_KEY: PROXMOX_API_URL
 
   # Technitium DNS Ansible paths
-  TECHNITIUM_ANSIBLE_DIR: ansible/technitium
-  TECHNITIUM_ANSIBLE_PLAYBOOK: '{{.TECHNITIUM_ANSIBLE_DIR}}/playbooks/site.yml'
+  TECHNITIUM_ANSIBLE_DIR: ansible
+  TECHNITIUM_ANSIBLE_PLAYBOOK: '{{.TECHNITIUM_ANSIBLE_DIR}}/playbooks/technitium.yml'
 includes:
   passwords: ./taskfile/passwords.Taskfile.yml
   github: ./taskfile/github.Taskfile.yml

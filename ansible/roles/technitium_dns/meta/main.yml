@@ -1,0 +1,22 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/meta/main.yml
+# Purpose:
+#   Role metadata for the homelab Technitium DNS baseline.
+# ==============================================================================
+
+galaxy_info:
+  role_name: technitium_dns
+  author: homelab
+  description: Configure Technitium DNS primary, secondary, zones, records, backups, and validation.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+    - name: Debian
+      versions:
+        - all
+
+dependencies: []

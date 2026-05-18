@@ -1,0 +1,114 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/zones.yml
+# Purpose:
+#   Configure primary Technitium authoritative zones and static records.
+# Notes:
+#   - Runs only on technitium_primary_host.
+#   - API calls are delegated to localhost.
+# ==============================================================================
+
+- name: Set Technitium primary API base URL
+  ansible.builtin.set_fact:
+    technitium_base_url: "{{ technitium_api_scheme }}://{{ ansible_host }}:{{ technitium_web_port }}"
+  when: inventory_hostname == technitium_primary_host
+
+- name: Login to Technitium API on primary
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/user/login"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      user: "{{ technitium_admin_user }}"
+      pass: "{{ technitium_admin_password }}"
+      includeInfo: "true"
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  register: technitium_login
+  when: inventory_hostname == technitium_primary_host
+  no_log: true
+
+- name: Create primary authoritative zones
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/zones/create"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ technitium_login.json.token }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item.name }}"
+      type: "{{ technitium_primary_zone_type }}"
+      useSoaSerialDateScheme: "true"
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  loop: "{{ technitium_zones }}"
+  when: inventory_hostname == technitium_primary_host
+  failed_when: false
+  no_log: true
+
+- name: Allow zone transfer and notify to secondary
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/zones/options/set"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ technitium_login.json.token }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item.name }}"
+      disabled: "false"
+      zoneTransfer: Allow
+      zoneTransferNameServers: "{{ technitium_secondary_ip }}"
+      notify: SpecifiedNameServers
+      notifyNameServers: "{{ technitium_secondary_ip }}"
+      queryAccess: Allow
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  loop: "{{ technitium_zones }}"
+  when: inventory_hostname == technitium_primary_host
+  no_log: true
+
+- name: Add or update A records on primary
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/zones/records/add"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ technitium_login.json.token }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item.zone }}"
+      domain: "{{ item.name }}"
+      type: A
+      ipAddress: "{{ item.ip }}"
+      ttl: "{{ item.ttl | default(3600) }}"
+      overwrite: "true"
+      ptr: "false"
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  loop: "{{ technitium_a_records }}"
+  when: inventory_hostname == technitium_primary_host
+  no_log: true
+
+- name: Add or update PTR records on primary
+  ansible.builtin.uri:
+    url: "{{ technitium_base_url }}/api/zones/records/add"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ technitium_login.json.token }}"
+    body_format: form-urlencoded
+    body:
+      zone: "{{ item.zone }}"
+      domain: "{{ item.name }}"
+      type: PTR
+      ptrName: "{{ item.ptr }}"
+      ttl: "{{ item.ttl | default(3600) }}"
+      overwrite: "true"
+    return_content: true
+    status_code: 200
+  delegate_to: localhost
+  loop: "{{ technitium_ptr_records }}"
+  when: inventory_hostname == technitium_primary_host
+  no_log: true

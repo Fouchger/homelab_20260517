@@ -7,7 +7,7 @@ This repository keeps infrastructure DNS records under Ansible control and uses 
 Static records remain in:
 
 ```text
-ansible/technitium/group_vars/technitiumdns.yml
+ansible/group_vars/technitiumdns.yml
 ```
 
 Dynamic DHCP records are created under:
@@ -90,3 +90,26 @@ Technitium DDNS updated
 ## Notes
 
 The script writes to the primary Technitium server only. Secondary propagation is handled by Technitium zone transfer from dns01 to dns02.
+
+## Ansible layout
+
+Technitium uses the standard repository Ansible layout:
+
+```text
+ansible/
+  playbooks/technitium.yml
+  group_vars/technitiumdns.yml
+  roles/technitium_dns/
+    defaults/main.yml
+    tasks/main.yml
+    tasks/bootstrap.yml
+    tasks/host_baseline.yml
+    tasks/zones.yml
+    tasks/secondary.yml
+    tasks/validate_dns.yml
+    handlers/main.yml
+    templates/technitium-backup.sh.j2
+    meta/main.yml
+```
+
+Keep reusable role defaults in `ansible/roles/technitium_dns/defaults/main.yml` and environment-specific non-secret values in `ansible/group_vars/technitiumdns.yml`.

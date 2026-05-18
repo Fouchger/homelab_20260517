@@ -1,0 +1,27 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/defaults/main.yml
+# Purpose:
+#   Safe default values for the Technitium DNS role.
+# Notes:
+#   - Environment-specific values belong in ansible/group_vars/technitiumdns.yml.
+#   - Secrets must be provided via SOPS-backed extra vars.
+# ==============================================================================
+
+technitium_web_port: 5380
+technitium_api_scheme: http
+technitium_admin_user: "{{ technitium_admin_user_secret | default('admin') }}"
+technitium_primary_zone_type: Primary
+technitium_secondary_zone_type: Secondary
+technitium_backup_directory: /var/backups/technitium
+technitium_backup_retention_days: 14
+technitium_backup_hour: "2"
+technitium_backup_minute: "15"
+technitium_required_packages:
+  - ca-certificates
+  - curl
+  - dnsutils
+  - jq
+  - logrotate
+  - python3-requests
+  - ufw

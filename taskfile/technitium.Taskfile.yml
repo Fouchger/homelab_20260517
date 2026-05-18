@@ -6,7 +6,7 @@
 # Purpose:
 #   Wire the Technitium DNS Ansible baseline into the homelab operational model.
 # Notes:
-#   - Non-secret DNS defaults live under ansible/technitium/group_vars.
+#   - Non-secret DNS defaults live under ansible/group_vars and role defaults live under ansible/roles.
 #   - Credentials are stored only in the encrypted SOPS password file.
 # ==============================================================================
 
@@ -71,8 +71,8 @@ tasks:
 
         required_files="
         {{.ANSIBLE_INVENTORY_FILE}}
-        ansible/technitium/playbooks/site.yml
-        ansible/technitium/group_vars/technitiumdns.yml
+        ansible/playbooks/technitium.yml
+        ansible/group_vars/technitiumdns.yml
         scripts/lib/technitium-run-playbook.sh
         scripts/lib/technitium-credentials.sh
         scripts/lib/technitium-inventory-sync.py

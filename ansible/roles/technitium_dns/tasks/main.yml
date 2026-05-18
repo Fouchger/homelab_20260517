@@ -1,0 +1,29 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/main.yml
+# Purpose:
+#   Validate required Technitium variables before configuration starts.
+# ==============================================================================
+
+- name: Confirm required Technitium secrets are present
+  ansible.builtin.assert:
+    that:
+      - technitium_initial_password is defined
+      - technitium_initial_password | length > 0
+      - technitium_admin_password is defined
+      - technitium_admin_password | length >= 12
+    fail_msg: "Technitium secrets are missing. Run: task technitium:credentials"
+  run_once: true
+  no_log: true
+
+- name: Confirm required Technitium topology variables are present
+  ansible.builtin.assert:
+    that:
+      - technitium_primary_host is defined
+      - technitium_secondary_host is defined
+      - technitium_primary_ip is defined
+      - technitium_secondary_ip is defined
+      - technitium_zones is defined
+      - technitium_zones | length > 0
+    fail_msg: "Technitium topology variables are missing from ansible/group_vars/technitiumdns.yml"
+  run_once: true

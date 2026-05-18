@@ -1,6 +1,6 @@
 ---
 # ==============================================================================
-# File: ansible/technitium/group_vars/technitiumdns.yml
+# File: ansible/group_vars/technitiumdns.yml
 # Purpose:
 #   Non-secret Technitium DNS enterprise baseline variables.
 # Notes:

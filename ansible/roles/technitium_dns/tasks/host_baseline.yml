@@ -1,0 +1,64 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/host_baseline.yml
+# Purpose:
+#   Prepare host-level firewall, tooling, and backup baseline for Technitium DNS.
+# ==============================================================================
+
+- name: Install baseline DNS operations packages
+  ansible.builtin.apt:
+    name: "{{ technitium_required_packages }}"
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+- name: Allow SSH through UFW
+  ansible.builtin.command: ufw allow 22/tcp
+  changed_when: false
+
+- name: Allow DNS UDP from homelab VLANs
+  ansible.builtin.command: "ufw allow from {{ item }} to any port 53 proto udp"
+  loop: "{{ technitium_allowed_client_networks }}"
+  changed_when: false
+
+- name: Allow DNS TCP from homelab VLANs
+  ansible.builtin.command: "ufw allow from {{ item }} to any port 53 proto tcp"
+  loop: "{{ technitium_allowed_client_networks }}"
+  changed_when: false
+
+- name: Allow Technitium web console from MGMT VLAN only
+  ansible.builtin.command: "ufw allow from {{ technitium_mgmt_network }} to any port {{ technitium_web_port }} proto tcp"
+  changed_when: false
+
+- name: Enable UFW with default deny incoming
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ufw default deny incoming
+    ufw --force enable
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Ensure Technitium backup directory exists
+  ansible.builtin.file:
+    path: "{{ technitium_backup_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install Technitium local backup script
+  ansible.builtin.template:
+    src: technitium-backup.sh.j2
+    dest: /usr/local/sbin/technitium-backup.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Schedule daily Technitium configuration backup
+  ansible.builtin.cron:
+    name: Technitium daily configuration backup
+    minute: "{{ technitium_backup_minute }}"
+    hour: "{{ technitium_backup_hour }}"
+    user: root
+    job: /usr/local/sbin/technitium-backup.sh
