@@ -25,6 +25,7 @@ DEFAULT_SSH_USER="root"
 DEFAULT_SSH_KEY_FILE="${HOME}/.ssh/homelab_ed25519"
 REMOTE_CONFIG_FILE=""
 REMOTE_SCRIPT_FILE=""
+REMOTE_AUTHORIZED_KEY_FILE=""
 INVENTORY_MANAGER_SCRIPT="${INVENTORY_MANAGER_SCRIPT:-scripts/lib/inventory-manager.py}"
 ANSIBLE_INVENTORY_FILE="${ANSIBLE_INVENTORY_FILE:-state/ansible/inventory.yml}"
 PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:-state/secrets/passwords/passwords.enc.env}"
@@ -57,8 +58,8 @@ require_value() {
 
 cleanup_remote_files() {
   if [[ -n "${remote_target:-}" ]]; then
-    if [[ -n "${REMOTE_CONFIG_FILE}" || -n "${REMOTE_SCRIPT_FILE}" ]]; then
-      ssh "${ssh_options[@]}" "$remote_target" "rm -f '${REMOTE_CONFIG_FILE}' '${REMOTE_SCRIPT_FILE}'" >/dev/null 2>&1 || true
+    if [[ -n "${REMOTE_CONFIG_FILE}" || -n "${REMOTE_SCRIPT_FILE}" || -n "${REMOTE_AUTHORIZED_KEY_FILE}" ]]; then
+      ssh "${ssh_options[@]}" "$remote_target" "rm -f '${REMOTE_CONFIG_FILE}' '${REMOTE_SCRIPT_FILE}' '${REMOTE_AUTHORIZED_KEY_FILE}'" >/dev/null 2>&1 || true
     fi
   fi
 }
@@ -80,6 +81,12 @@ require_value PROXMOX_SSH_HOST "$PROXMOX_SSH_HOST"
 
 if [[ ! -f "$HOMELAB_SSH_KEY_FILE" ]]; then
   echo "ERROR: Admin-server SSH key was not found: ${HOMELAB_SSH_KEY_FILE}" >&2
+  echo "Run: task ssh:key:ensure" >&2
+  exit 1
+fi
+
+if [[ ! -f "${HOMELAB_SSH_KEY_FILE}.pub" ]]; then
+  echo "ERROR: Admin-server SSH public key was not found: ${HOMELAB_SSH_KEY_FILE}.pub" >&2
   echo "Run: task ssh:key:ensure" >&2
   exit 1
 fi
@@ -108,6 +115,7 @@ scp_options=(
 remote_target="${PROXMOX_SSH_USER}@${PROXMOX_SSH_HOST}"
 REMOTE_CONFIG_FILE="/tmp/homelab-proxmox-community-lxc-$RANDOM-$$.yml"
 REMOTE_SCRIPT_FILE="/tmp/homelab-proxmox-community-lxc-$RANDOM-$$.sh"
+REMOTE_AUTHORIZED_KEY_FILE="/tmp/homelab-proxmox-community-lxc-$RANDOM-$$.pub"
 local_remote_script="$(mktemp)"
 trap 'rm -f "$local_remote_script"; cleanup_remote_files' EXIT
 
@@ -118,6 +126,7 @@ export TERM="${TERM:-xterm}"
 COMMUNITY_SCRIPT_BASE_URL="https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/ct"
 LXC_CONFIG_FILE="${LXC_CONFIG_FILE:?LXC_CONFIG_FILE is required}"
 LXC_SCRIPT_FILTER="${LXC_SCRIPT_FILTER:-}"
+HOMELAB_LXC_AUTHORIZED_KEY_FILE="${HOMELAB_LXC_AUTHORIZED_KEY_FILE:-}"
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -128,8 +137,14 @@ require_command() {
 
 find_lxc_authorized_key() {
   local candidate key_line
+  local candidates=()
+
+  if [[ -n "$HOMELAB_LXC_AUTHORIZED_KEY_FILE" ]]; then
+    candidates+=("$HOMELAB_LXC_AUTHORIZED_KEY_FILE")
+  fi
+
   shopt -s nullglob
-  local candidates=(
+  candidates+=(
     /root/.ssh/homelab_ed25519.pub
     /root/.ssh/id_ed25519.pub
     /root/.ssh/id_rsa.pub
@@ -147,9 +162,30 @@ find_lxc_authorized_key() {
     fi
   done
 
-  echo "ERROR: No usable SSH public key found in /root/.ssh on the Proxmox host." >&2
-  echo "Create or copy a public key there first, for example /root/.ssh/id_ed25519.pub." >&2
+  echo "ERROR: No usable SSH public key found for LXC root access." >&2
+  echo "Expected the admin-server public key to be copied to the Proxmox host first." >&2
   return 1
+}
+
+ensure_lxc_authorized_key() {
+  local ctid="$1"
+  local hostname="$2"
+  local key_line
+
+  [[ -n "$ctid" ]] || return 0
+  key_line="$(find_lxc_authorized_key)"
+
+  if pct exec "$ctid" -- grep -qxF "$key_line" /root/.ssh/authorized_keys >/dev/null 2>&1; then
+    echo "INFO: SSH public key already present in CT ${ctid} (${hostname})."
+    return 0
+  fi
+
+  echo "INFO: Installing SSH public key in CT ${ctid} (${hostname})."
+  pct exec "$ctid" -- mkdir -p /root/.ssh
+  pct exec "$ctid" -- chmod 700 /root/.ssh
+  printf '%s
+' "$key_line" | pct exec "$ctid" -- sh -c 'cat >> /root/.ssh/authorized_keys'
+  pct exec "$ctid" -- chmod 600 /root/.ssh/authorized_keys
 }
 
 ct_exists() {
@@ -299,6 +335,7 @@ while IFS=$'\t' read -r script_name instance_name var_key var_value; do
   next_key="${script_name}/${instance_name}"
   if [[ -n "$current_key" && "$next_key" != "$current_key" ]]; then
     run_instance "${current_key%%/*}" "${current_key#*/}" current_vars
+    ensure_lxc_authorized_key "${current_vars[var_ctid]:-}" "${current_vars[var_hostname]:-${current_key#*/}}"
     collect_lxc_manifest "${current_key%%/*}" "${current_key#*/}" current_vars
     created_ctids+=("${current_vars[var_ctid]:-}")
     current_vars=()
@@ -310,6 +347,7 @@ done < <(parse_lxc_config)
 
 if [[ -n "$current_key" ]]; then
   run_instance "${current_key%%/*}" "${current_key#*/}" current_vars
+  ensure_lxc_authorized_key "${current_vars[var_ctid]:-}" "${current_vars[var_hostname]:-${current_key#*/}}"
   collect_lxc_manifest "${current_key%%/*}" "${current_key#*/}" current_vars
   created_ctids+=("${current_vars[var_ctid]:-}")
 fi
@@ -346,6 +384,7 @@ sync_lxc_inventory() {
     ssh_user="${ssh_user:-root}"
 
     echo "Updating Ansible inventory for ${hostname} (${ansible_host})..."
+    ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "$ansible_host" >/dev/null 2>&1 || true
     python3 -S "$INVENTORY_MANAGER_SCRIPT" add-server \
       --inventory-file "$ANSIBLE_INVENTORY_FILE" \
       --password-file "$PASSWORDS_ENCRYPTED_FILE" \
@@ -376,6 +415,7 @@ chmod 700 "$local_remote_script"
 echo "Copying LXC config to ${remote_target}..."
 scp "${scp_options[@]}" "$LXC_CONFIG_FILE" "${remote_target}:${REMOTE_CONFIG_FILE}" >/dev/null
 scp "${scp_options[@]}" "$local_remote_script" "${remote_target}:${REMOTE_SCRIPT_FILE}" >/dev/null
+scp "${scp_options[@]}" "${HOMELAB_SSH_KEY_FILE}.pub" "${remote_target}:${REMOTE_AUTHORIZED_KEY_FILE}" >/dev/null
 
 echo "Ensuring Proxmox community-script LXC containers on ${remote_target}..."
 
@@ -383,6 +423,6 @@ local_ssh_output="$(mktemp)"
 trap 'rm -f "$local_remote_script" "$local_ssh_output"; cleanup_remote_files' EXIT
 
 ssh -tt "${ssh_options[@]}" "$remote_target" \
-  "export TERM=\"${TERM:-xterm}\"; LXC_CONFIG_FILE='${REMOTE_CONFIG_FILE}' LXC_SCRIPT_FILTER='${LXC_SCRIPT_FILTER}' bash '${REMOTE_SCRIPT_FILE}'" | tee "$local_ssh_output"
+  "export TERM=\"${TERM:-xterm}\"; LXC_CONFIG_FILE='${REMOTE_CONFIG_FILE}' LXC_SCRIPT_FILTER='${LXC_SCRIPT_FILTER}' HOMELAB_LXC_AUTHORIZED_KEY_FILE='${REMOTE_AUTHORIZED_KEY_FILE}' bash '${REMOTE_SCRIPT_FILE}'" | tee "$local_ssh_output"
 
 sync_lxc_inventory "$local_ssh_output"

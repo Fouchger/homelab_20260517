@@ -492,19 +492,28 @@ def add_servers(args: argparse.Namespace, interactive: bool) -> None:
             server['ansible_password'] = "{{ lookup('env', '" + ssh_password_var + "') }}"
             server['homelab_ssh_password_var'] = ssh_password_var
 
+        detail = f'ansible_host={ansible_host}, group={group}, network={network_status}, vm_lxc_id={vm_lxc_id or "-"}, mac={mac_address or "-"}, password_var={ssh_password_var or "-"}, password_saved={"yes" if password_saved else "no"}'
+
         if existing_server is not None:
+            current_server = dict(existing_server)
+            target_already_matches = existing_location == group and current_server == server
+            if target_already_matches:
+                all_inventory_targets.add(ansible_host)
+                report.append(('SKIPPED', hostname, f'{detail}, reason=already matches inventory'))
+                continue
+
             if existing_location != group and hostname in root_hosts:
                 del root_hosts[hostname]
             groups[group][hostname] = server
             all_inventory_targets.add(ansible_host)
             added += 1
-            report.append(('UPDATED', hostname, f'ansible_host={ansible_host}, group={group}, network={network_status}, vm_lxc_id={vm_lxc_id or "-"}, mac={mac_address or "-"}, password_var={ssh_password_var or "-"}, password_saved={"yes" if password_saved else "no"}'))
+            report.append(('UPDATED', hostname, detail))
         else:
             groups[group][hostname] = server
             all_inventory_hosts.add(hostname)
             all_inventory_targets.add(ansible_host)
             added += 1
-            report.append(('ADDED', hostname, f'ansible_host={ansible_host}, group={group}, network={network_status}, vm_lxc_id={vm_lxc_id or "-"}, mac={mac_address or "-"}, password_var={ssh_password_var or "-"}, password_saved={"yes" if password_saved else "no"}'))
+            report.append(('ADDED', hostname, detail))
 
     if added:
         write_inventory(inventory_file, root_hosts, groups)
