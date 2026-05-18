@@ -33,17 +33,20 @@ tasks:
 
         Routine flow
           task technitium:setup
-            Ensure the LXCs exist, sync inventory, prompt for credentials, and run the DNS playbook.
+            Ensure the LXCs exist, sync inventory, ensure credentials, run DNS configuration, create the DHCP sync API token, and render the MikroTik script.
 
           task technitium:configure
             Run the DNS playbook using encrypted credentials already stored in SOPS.
+
+          task technitium:dhcp-sync:render
+            Render the MikroTik DHCP lease script that publishes records to Technitium.
 
         Setup helpers
           task technitium:inventory:sync
             Sync dns01 and dns02 from config/proxmox-community-lxc.yml into state/ansible/inventory.yml.
 
           task technitium:credentials
-            Prompt for the current Technitium password and new production password, then store them in SOPS.
+            Ensure Technitium bootstrap credentials exist in SOPS without prompting.
 
         Validation
           task technitium:validate
@@ -51,12 +54,14 @@ tasks:
         EOHELP
 
   setup:
-    desc: Ensure Technitium LXCs, sync inventory, prompt credentials, and configure DNS.
+    desc: Ensure Technitium LXCs, sync inventory, credentials, API token, and DNS configuration.
     cmds:
       - task: :proxmox_scripts:technitiumdns:ensure
       - task: inventory:sync
       - task: credentials
       - task: configure
+      - task: dhcp-sync:token
+      - task: dhcp-sync:render
 
   validate:
     desc: Validate Technitium Ansible files and inventory prerequisites.
@@ -71,6 +76,9 @@ tasks:
         scripts/lib/technitium-run-playbook.sh
         scripts/lib/technitium-credentials.sh
         scripts/lib/technitium-inventory-sync.py
+        scripts/lib/technitium-api-token.sh
+        scripts/lib/technitium-mikrotik-ddns-render.sh
+        scripts/templates/routeros/technitium-dhcp-ddns.rsc.template
         "
 
         for required_file in $required_files; do
@@ -127,7 +135,7 @@ tasks:
           --recipients-file '{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}'
 
   credentials:
-    desc: Prompt for Technitium credentials and store them in the encrypted SOPS password file.
+    desc: Ensure Technitium bootstrap credentials exist in the encrypted SOPS password file without prompts.
     deps:
       - :passwords:encrypt
     cmds:
@@ -150,3 +158,42 @@ tasks:
           SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
           ANSIBLE_INVENTORY_FILE='{{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}' \
           '{{.ROOT_DIR}}/scripts/lib/technitium-run-playbook.sh'
+
+  dhcp-sync:token:
+    desc: Create or validate the Technitium DHCP sync API token without prompts.
+    deps:
+      - credentials
+    cmds:
+      - |
+        set -euo pipefail
+        PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
+          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
+          TECHNITIUM_PRIMARY_URL='http://192.168.30.2:5380' \
+          '{{.ROOT_DIR}}/scripts/lib/technitium-api-token.sh'
+
+  dhcp-sync:render:
+    desc: Render the MikroTik DHCP lease script for Technitium dynamic DNS updates.
+    deps:
+      - dhcp-sync:token
+    cmds:
+      - |
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
+          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          '{{.ROOT_DIR}}/scripts/lib/technitium-mikrotik-ddns-render.sh'
+
+  dhcp-sync:show:
+    desc: Print the rendered MikroTik DHCP lease script path and safe install reminder.
+    cmds:
+      - |
+        set -euo pipefail
+        output_file='{{.ROOT_DIR}}/state/generated/routeros/technitium-dhcp-ddns.rsc'
+        if [[ ! -f "$output_file" ]]; then
+          echo 'ERROR: Rendered RouterOS script not found. Run: task technitium:dhcp-sync:render' >&2
+          exit 1
+        fi
+        echo "Rendered RouterOS script: ${output_file}"
+        echo 'Copy this file to the MikroTik router and run:'
+        echo '/import file-name=technitium-dhcp-ddns.rsc'
