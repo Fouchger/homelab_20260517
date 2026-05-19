@@ -22,8 +22,12 @@
       includeInfo: "true"
     return_content: true
     status_code: [200, 401, 403]
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
   register: technitium_prod_login
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_prod_login is not failed
   failed_when: false
   no_log: true
 
@@ -38,8 +42,12 @@
       includeInfo: "true"
     return_content: true
     status_code: [200, 401, 403]
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
   register: technitium_initial_login
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_initial_login is not failed
   when: technitium_prod_login.json.status | default('error') != 'ok'
   failed_when: false
   no_log: true
@@ -57,7 +65,12 @@
       iterations: "200000"
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
+  register: technitium_password_change
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_password_change is succeeded
   when:
     - technitium_prod_login.json.status | default('error') != 'ok'
     - technitium_initial_login.json.status | default('error') == 'ok'

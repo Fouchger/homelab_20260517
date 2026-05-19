@@ -94,6 +94,7 @@ if [[ "$TECHNITIUM_DHCP_SYNC_TOKEN_FORCE" != "1" && -n "$existing_token" ]]; the
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -104,13 +105,18 @@ request = urllib.request.Request(
     headers={'Authorization': f'Bearer {token}'},
     method='POST',
 )
-try:
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = json.loads(response.read().decode('utf-8'))
-except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-    sys.exit(1)
+payload = None
+for attempt in range(1, 6):
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+        break
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        if attempt == 5:
+            sys.exit(1)
+        time.sleep(min(attempt * 2, 8))
 
-sys.exit(0 if payload.get('status') == 'ok' else 1)
+sys.exit(0 if payload and payload.get('status') == 'ok' else 1)
 PYVALIDATE
   then
     echo 'Technitium DHCP sync API token already exists and is valid. Skipping token creation.'
@@ -129,8 +135,8 @@ new_token="$(TECHNITIUM_PRIMARY_URL="$TECHNITIUM_PRIMARY_URL" \
 import json
 import os
 import secrets
-import string
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -153,7 +159,7 @@ dynamic_zones = [
 ]
 
 
-def api_call(path, data=None, token=None, timeout=15):
+def api_call(path, data=None, token=None, timeout=20, retries=5):
     encoded = None
     headers = {}
     if data is not None:
@@ -167,8 +173,17 @@ def api_call(path, data=None, token=None, timeout=15):
         headers=headers,
         method='POST',
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode('utf-8'))
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            last_error = error
+            if attempt == retries:
+                raise
+            time.sleep(min(attempt * 2, 10))
+    raise RuntimeError(f'API call failed: {last_error}')
 
 try:
     login = api_call('/api/user/login', {

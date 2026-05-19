@@ -1,115 +1,77 @@
-# Technitium DHCP Dynamic DNS Sync
+# Technitium DHCP Sync
 
-## Purpose
+This document describes the homelab Technitium DNS integration.
 
-This repository keeps infrastructure DNS records under Ansible control and uses a MikroTik DHCP lease script for dynamic client records.
+## Current design
 
-Static records remain in:
+MikroTik remains the DHCP authority for the VLANs. Technitium is the internal DNS authority and resolver pair:
 
-```text
-ansible/group_vars/technitiumdns.yml
-```
+- `dns01` / primary: `192.168.30.2`
+- `dns02` / secondary: `192.168.30.3`
 
-Dynamic DHCP records are created under:
+DHCP clients receive the Technitium pair from MikroTik. A generated RouterOS lease script publishes dynamic DHCP A and PTR records to Technitium through the Technitium API.
 
-```text
-dhcp.fouchger.uk
-```
+Dynamic client records are isolated under:
 
-This keeps client leases separate from production infrastructure records.
+- `dhcp.fouchger.uk`
 
-## Flow
+Static infrastructure records remain managed by Ansible under the primary internal zones.
 
-```text
-MikroTik DHCP lease event
-  -> RouterOS lease script
-  -> Technitium primary API at 192.168.30.2:5380
-  -> A record in dhcp.fouchger.uk
-  -> PTR record in the matching reverse zone
-  -> Zone transfer to dns02
-```
+## Routine command
 
-## Automated Technitium setup
-
-The repository creates and maintains the DHCP sync token without user interaction.
-
-`task technitium:setup` performs this sequence:
-
-1. Ensures the Technitium LXCs exist.
-2. Syncs `dns01` and `dns02` into the Ansible inventory.
-3. Ensures bootstrap admin credentials exist in SOPS.
-4. Configures zones and records through Ansible.
-5. Creates or validates the dedicated `mikrotik-ddns` Technitium user.
-6. Grants that user view, modify, and delete access to `dhcp.fouchger.uk` and the VLAN reverse zones.
-7. Creates a non-expiring API token for the dedicated user and stores it as `TECHNITIUM_DHCP_SYNC_TOKEN` in SOPS.
-8. Renders the RouterOS lease script.
-
-No manual Technitium token creation is required. To rotate the token, run:
+Run the full setup from the repository root:
 
 ```bash
-TECHNITIUM_DHCP_SYNC_TOKEN_FORCE=1 task technitium:dhcp-sync:token
+task technitium:setup
 ```
 
-## Render the RouterOS script
+The task flow:
 
-```bash
-task technitium:dhcp-sync:render
-```
+1. Ensures the Technitium LXC containers exist.
+2. Syncs `dns01` and `dns02` into the runtime Ansible inventory.
+3. Reuses existing SOPS credentials without prompts.
+4. Configures Technitium primary/secondary zones and records.
+5. Creates or reuses the dedicated DHCP sync API token.
+6. Renders the MikroTik RouterOS DHCP DDNS script.
+7. Deploys and imports the RouterOS script over SSH when MikroTik SSH access is available.
 
-The rendered file is written to:
+## Secrets
+
+Secrets stay in:
 
 ```text
-state/generated/routeros/technitium-dhcp-ddns.rsc
+state/secrets/passwords/passwords.enc.env
 ```
 
-The rendered file contains the API token and must not be committed.
+Supported MikroTik deployment secrets:
 
-## Apply on MikroTik
-
-Copy the rendered file to the MikroTik router and run:
-
-```routeros
-/import file-name=technitium-dhcp-ddns.rsc
+```env
+MIKROTIK_HOST=192.168.20.1
+MIKROTIK_SSH_USER=admin
+MIKROTIK_SSH_PASSWORD=optional_password_for_non_interactive_ssh
 ```
 
-## Validate
+If `MIKROTIK_SSH_PASSWORD` is absent, the deployment script uses key-based SSH.
 
-From a client VLAN, renew a DHCP lease and then test:
+## Hardening included
 
-```bash
-nslookup <hostname>.dhcp.fouchger.uk 192.168.30.2
-nslookup <leased-ip> 192.168.30.2
+The role includes:
+
+- Ansible fact syntax compatible with future Ansible releases.
+- API timeout, retry, and backoff controls.
+- DNS validation for forward records, reverse records, recursion, and SOA serial sync.
+- Management-only HTTPS reverse proxy on port `5443`.
+- Technitium systemd service detection and enablement.
+- Lightweight local health checks with optional Uptime Kuma push URL support.
+- Automated MikroTik script deployment.
+- Disabled-by-default split-horizon DNS scaffold for future internal/public record policy.
+
+## Optional monitoring push
+
+To push health results into Uptime Kuma later, set this non-secret variable in `ansible/group_vars/technitiumdns.yml`:
+
+```yaml
+technitium_uptime_kuma_push_url: "https://kuma.example/api/push/example"
 ```
 
-Check RouterOS logs for:
-
-```text
-Technitium DDNS updated
-```
-
-## Notes
-
-The script writes to the primary Technitium server only. Secondary propagation is handled by Technitium zone transfer from dns01 to dns02.
-
-## Ansible layout
-
-Technitium uses the standard repository Ansible layout:
-
-```text
-ansible/
-  playbooks/technitium.yml
-  group_vars/technitiumdns.yml
-  roles/technitium_dns/
-    defaults/main.yml
-    tasks/main.yml
-    tasks/bootstrap.yml
-    tasks/host_baseline.yml
-    tasks/zones.yml
-    tasks/secondary.yml
-    tasks/validate_dns.yml
-    handlers/main.yml
-    templates/technitium-backup.sh.j2
-    meta/main.yml
-```
-
-Keep reusable role defaults in `ansible/roles/technitium_dns/defaults/main.yml` and environment-specific non-secret values in `ansible/group_vars/technitiumdns.yml`.
+Keep it blank to write local status only.

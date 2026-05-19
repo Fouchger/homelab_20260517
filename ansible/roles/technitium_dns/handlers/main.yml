@@ -8,3 +8,8 @@
 - name: Reload ufw
   ansible.builtin.command: ufw reload
   changed_when: false
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded

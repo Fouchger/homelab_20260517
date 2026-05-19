@@ -10,7 +10,43 @@
     name: "{{ technitium_required_packages }}"
     state: present
     update_cache: true
-  when: ansible_os_family == "Debian"
+  when: ansible_facts["os_family"] == "Debian"
+
+- name: Detect Technitium process
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+
+      if pgrep -fa technitium >/dev/null 2>&1; then
+        echo "technitium"
+        exit 0
+      fi
+
+      if ss -lntup | grep -q ':53 '; then
+        echo "dns-port-active"
+        exit 0
+      fi
+
+      exit 1
+  register: technitium_process_check
+  changed_when: false
+  failed_when: technitium_process_check.rc != 0
+
+- name: Report detected Technitium runtime
+  ansible.builtin.debug:
+    msg: "Detected Technitium runtime: {{ technitium_process_check.stdout }}"
+
+- name: Set detected Technitium runtime name
+  ansible.builtin.set_fact:
+    technitium_runtime_name: "{{ technitium_process_check.stdout | trim }}"
+
+- name: Ensure Technitium service is enabled and running
+  ansible.builtin.systemd:
+    name: "{{ technitium_runtime_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
 
 - name: Allow SSH through UFW
   ansible.builtin.command: ufw allow 22/tcp
@@ -62,3 +98,11 @@
     hour: "{{ technitium_backup_hour }}"
     user: root
     job: /usr/local/sbin/technitium-backup.sh
+
+- name: Configure management TLS reverse proxy
+  ansible.builtin.include_tasks: tls_proxy.yml
+  when: technitium_tls_proxy_enabled | bool
+
+- name: Configure local DNS monitoring checks
+  ansible.builtin.include_tasks: monitoring.yml
+  when: technitium_monitoring_enabled | bool

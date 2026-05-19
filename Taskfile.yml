@@ -282,6 +282,7 @@ tasks:
     desc: Capture Proxmox host configuration, bootstrap SSH access, and prepare the Proxmox API automation account.
     cmds:
       - task: proxmox:api:ensure
+      - task: technitium:setup
 
   homelab:validate:
     desc: Run final health checks, then write the setup marker.
@@ -306,7 +307,6 @@ tasks:
     desc: 
     cmds:
       - task: proxmox_scripts:technitiumdns:ensure
-      - task: technitium:setup
     
 
   ci:

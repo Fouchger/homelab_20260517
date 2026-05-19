@@ -24,8 +24,12 @@
       includeInfo: "true"
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
   register: technitium_login
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_login is succeeded
   when: inventory_hostname == technitium_secondary_host
   no_log: true
 
@@ -43,7 +47,12 @@
       zoneTransferProtocol: Tcp
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
+  register: technitium_secondary_zone_create
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_secondary_zone_create is not failed
   loop: "{{ technitium_zones }}"
   when: inventory_hostname == technitium_secondary_host
   failed_when: false

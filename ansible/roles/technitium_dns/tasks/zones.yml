@@ -24,8 +24,12 @@
       includeInfo: "true"
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
   register: technitium_login
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_login is succeeded
   when: inventory_hostname == technitium_primary_host
   no_log: true
 
@@ -42,7 +46,12 @@
       useSoaSerialDateScheme: "true"
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
+  register: technitium_zone_create
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_zone_create is not failed
   loop: "{{ technitium_zones }}"
   when: inventory_hostname == technitium_primary_host
   failed_when: false
@@ -65,7 +74,12 @@
       queryAccess: Allow
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
+  register: technitium_zone_options
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_zone_options is succeeded
   loop: "{{ technitium_zones }}"
   when: inventory_hostname == technitium_primary_host
   no_log: true
@@ -87,7 +101,12 @@
       ptr: "false"
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
+  register: technitium_a_record_result
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_a_record_result is succeeded
   loop: "{{ technitium_a_records }}"
   when: inventory_hostname == technitium_primary_host
   no_log: true
@@ -108,7 +127,12 @@
       overwrite: "true"
     return_content: true
     status_code: 200
+    timeout: "{{ technitium_api_timeout }}"
   delegate_to: localhost
+  register: technitium_ptr_record_result
+  retries: "{{ technitium_api_retries }}"
+  delay: "{{ technitium_api_retry_delay }}"
+  until: technitium_ptr_record_result is succeeded
   loop: "{{ technitium_ptr_records }}"
   when: inventory_hostname == technitium_primary_host
   no_log: true

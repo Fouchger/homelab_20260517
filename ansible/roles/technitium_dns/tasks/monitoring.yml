@@ -1,0 +1,29 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/monitoring.yml
+# Purpose:
+#   Install lightweight local DNS health monitoring for Technitium.
+# ==============================================================================
+
+- name: Ensure Technitium health directory exists
+  ansible.builtin.file:
+    path: "{{ technitium_monitoring_status_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Technitium health check script
+  ansible.builtin.template:
+    src: technitium-health-check.sh.j2
+    dest: /usr/local/sbin/technitium-health-check.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Schedule Technitium local health check
+  ansible.builtin.cron:
+    name: Technitium DNS local health check
+    minute: "{{ technitium_monitoring_check_minute }}"
+    user: root
+    job: /usr/local/sbin/technitium-health-check.sh >/dev/null 2>&1

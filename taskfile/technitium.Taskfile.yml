@@ -33,13 +33,16 @@ tasks:
 
         Routine flow
           task technitium:setup
-            Ensure the LXCs exist, sync inventory, ensure credentials, run DNS configuration, create the DHCP sync API token, and render the MikroTik script.
+            Ensure the LXCs exist, sync inventory, ensure credentials, run DNS configuration, create the DHCP sync API token, render the MikroTik script, and deploy it to MikroTik.
 
           task technitium:configure
             Run the DNS playbook using encrypted credentials already stored in SOPS.
 
           task technitium:dhcp-sync:render
             Render the MikroTik DHCP lease script that publishes records to Technitium.
+
+          task technitium:dhcp-sync:deploy
+            Copy and import the generated RouterOS script on MikroTik over SSH without prompts.
 
         Setup helpers
           task technitium:inventory:sync
@@ -62,6 +65,7 @@ tasks:
       - task: configure
       - task: dhcp-sync:token
       - task: dhcp-sync:render
+      - task: dhcp-sync:deploy
 
   validate:
     desc: Validate Technitium Ansible files and inventory prerequisites.
@@ -78,6 +82,7 @@ tasks:
         scripts/lib/technitium-inventory-sync.py
         scripts/lib/technitium-api-token.sh
         scripts/lib/technitium-mikrotik-ddns-render.sh
+        scripts/lib/technitium-mikrotik-ddns-deploy.sh
         scripts/templates/routeros/technitium-dhcp-ddns.rsc.template
         "
 
@@ -197,3 +202,17 @@ tasks:
         echo "Rendered RouterOS script: ${output_file}"
         echo 'Copy this file to the MikroTik router and run:'
         echo '/import file-name=technitium-dhcp-ddns.rsc'
+
+  dhcp-sync:deploy:
+    desc: Deploy and import the rendered MikroTik DHCP lease script over SSH without prompts.
+    deps:
+      - dhcp-sync:render
+    cmds:
+      - |
+        set -euo pipefail
+        ROOT_DIR='{{.ROOT_DIR}}' \
+          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
+          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          MIKROTIK_DEFAULT_HOST='192.168.20.1' \
+          MIKROTIK_DEFAULT_USER='admin' \
+          '{{.ROOT_DIR}}/scripts/lib/technitium-mikrotik-ddns-deploy.sh'

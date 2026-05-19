@@ -1,0 +1,65 @@
+---
+# ==============================================================================
+# File: ansible/roles/technitium_dns/tasks/tls_proxy.yml
+# Purpose:
+#   Expose the Technitium web console through a management-only HTTPS reverse proxy.
+# Notes:
+#   - The native Technitium HTTP listener remains unchanged on port 5380.
+#   - The proxy listens on technitium_tls_proxy_port and is restricted by UFW.
+# ==============================================================================
+
+- name: Ensure Technitium TLS directory exists
+  ansible.builtin.file:
+    path: /etc/technitium/tls
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Create internal self-signed certificate when missing
+  ansible.builtin.command: >-
+    openssl req -x509 -nodes -newkey rsa:4096
+    -keyout /etc/technitium/tls/technitium.key
+    -out /etc/technitium/tls/technitium.crt
+    -days {{ technitium_tls_certificate_days }}
+    -subj /CN={{ inventory_hostname }}.fouchger.uk
+    -addext subjectAltName=DNS:{{ inventory_hostname }}.fouchger.uk,IP:{{ ansible_host }}
+  args:
+    creates: /etc/technitium/tls/technitium.crt
+  notify: Reload nginx
+
+- name: Install Technitium Nginx TLS reverse proxy site
+  ansible.builtin.template:
+    src: technitium-nginx.conf.j2
+    dest: /etc/nginx/sites-available/technitium.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable Technitium Nginx TLS reverse proxy site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/technitium.conf
+    dest: /etc/nginx/sites-enabled/technitium.conf
+    state: link
+  notify: Reload nginx
+
+- name: Remove default Nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Validate Nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Ensure Nginx is enabled and running
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Allow Technitium HTTPS console from MGMT VLAN only
+  ansible.builtin.command: "ufw allow from {{ technitium_mgmt_network }} to any port {{ technitium_tls_proxy_port }} proto tcp"
+  changed_when: false

@@ -76,6 +76,21 @@
         - technitium
         - secondary
 
+- name: Configure optional Technitium split-horizon zones
+  hosts: technitiumdns
+  gather_facts: false
+  vars_files:
+    - ../group_vars/technitiumdns.yml
+  tasks:
+    - name: Run optional Technitium split-horizon tasks
+      ansible.builtin.include_role:
+        name: technitium_dns
+        tasks_from: split_horizon.yml
+      when: technitium_split_horizon_enabled | bool
+      tags:
+        - technitium
+        - split_horizon
+
 - name: Validate DNS service behaviour
   hosts: localhost
   gather_facts: false

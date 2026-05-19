@@ -72,3 +72,18 @@ technitium_ptr_records:
   - { zone: 30.168.192.in-addr.arpa, name: 2.30.168.192.in-addr.arpa, ptr: dns01.fouchger.uk, ttl: 3600 }
   - { zone: 30.168.192.in-addr.arpa, name: 3.30.168.192.in-addr.arpa, ptr: dns02.fouchger.uk, ttl: 3600 }
   - { zone: 30.168.192.in-addr.arpa, name: 10.30.168.192.in-addr.arpa, ptr: proxmox.fouchger.uk, ttl: 3600 }
+
+# Operational validation targets. Keep these non-secret.
+technitium_validation_forward_record: dns01.fouchger.uk
+technitium_validation_forward_ip: 192.168.30.2
+technitium_validation_reverse_ip: 192.168.30.2
+technitium_validation_reverse_name: dns01.fouchger.uk.
+technitium_validation_external_record: cloudflare.com
+
+# Optional future split-horizon support. Disabled until specific internal/public record policy is agreed.
+technitium_split_horizon_enabled: false
+technitium_split_horizon_zones: []
+
+# MikroTik script deployment defaults. Secrets, if needed, belong in SOPS.
+technitium_mikrotik_host: 192.168.20.1
+technitium_mikrotik_user: admin

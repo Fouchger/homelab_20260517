@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# File: /usr/local/sbin/technitium-health-check.sh
+# Purpose: Lightweight Technitium DNS health check for local monitoring.
+# Managed by Ansible.
+# ==============================================================================
+
+set -euo pipefail
+
+status_file={{ technitium_monitoring_status_file | quote }}
+push_url={{ technitium_uptime_kuma_push_url | quote }}
+resolver=127.0.0.1
+forward_record={{ technitium_validation_forward_record | quote }}
+expected_ip={{ technitium_validation_forward_ip | quote }}
+external_record={{ technitium_validation_external_record | quote }}
+
+mkdir -p "$(dirname "$status_file")"
+
+status=ok
+message=healthy
+resolved="$(dig @"$resolver" "$forward_record" +short | head -n 1 || true)"
+external="$(dig @"$resolver" "$external_record" +short | head -n 1 || true)"
+
+if [[ "$resolved" != "$expected_ip" ]]; then
+  status=critical
+  message="internal record failed"
+elif [[ -z "$external" ]]; then
+  status=critical
+  message="recursive resolution failed"
+fi
+
+printf '{"status":"%s","message":"%s","checked_at":"%s"}\n' "$status" "$message" "$(date -Is)" > "$status_file"
+
+if [[ -n "$push_url" ]]; then
+  if [[ "$status" == "ok" ]]; then
+    curl -fsS --max-time 10 "$push_url?status=up&msg=$message" >/dev/null || true
+  else
+    curl -fsS --max-time 10 "$push_url?status=down&msg=$message" >/dev/null || true
+  fi
+fi
+
+[[ "$status" == "ok" ]]

@@ -17,6 +17,23 @@ technitium_backup_directory: /var/backups/technitium
 technitium_backup_retention_days: 14
 technitium_backup_hour: "2"
 technitium_backup_minute: "15"
+technitium_api_timeout: 20
+technitium_api_retries: 5
+technitium_api_retry_delay: 3
+technitium_tls_proxy_enabled: true
+technitium_tls_proxy_port: 5443
+technitium_tls_certificate_days: 825
+technitium_service_candidates:
+  - dns
+  - technitiumdns
+  - technitium-dns
+technitium_monitoring_enabled: true
+technitium_monitoring_check_minute: "*/5"
+technitium_monitoring_status_directory: /var/lib/technitium-health
+technitium_monitoring_status_file: /var/lib/technitium-health/status.json
+technitium_uptime_kuma_push_url: ""
+technitium_split_horizon_enabled: false
+technitium_split_horizon_zones: []
 technitium_required_packages:
   - ca-certificates
   - curl
@@ -25,3 +42,5 @@ technitium_required_packages:
   - logrotate
   - python3-requests
   - ufw
+  - nginx
+  - openssl
