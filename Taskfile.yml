@@ -83,6 +83,10 @@ vars:
   # Technitium DNS Ansible paths
   TECHNITIUM_ANSIBLE_DIR: ansible
   TECHNITIUM_ANSIBLE_PLAYBOOK: '{{.TECHNITIUM_ANSIBLE_DIR}}/playbooks/technitium.yml'
+
+  # MikroTik RouterOS automation paths
+  MIKROTIK_GENERATED_DIR: '{{.STATE_DIR}}/generated/routeros'
+  MIKROTIK_BACKUP_DIR: '{{.BACKUP_DIR}}/mikrotik'
 includes:
   passwords: ./taskfile/passwords.Taskfile.yml
   github: ./taskfile/github.Taskfile.yml
@@ -93,6 +97,7 @@ includes:
   proxmox: ./taskfile/proxmox.Taskfile.yml
   proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
   technitium: ./taskfile/technitium.Taskfile.yml
+  mikrotik: ./taskfile/mikrotik.Taskfile.yml
 
 tasks:
   default:
@@ -239,6 +244,14 @@ tasks:
         task proxmox:api:report         -> Show Proxmox API bootstrap status without printing secrets.
 
         --------------------------------------------------------------
+        MikroTik RouterOS
+        --------------------------------------------------------------
+        task mikrotik:setup             -> Ask once for the current admin password, create sensitive backups,
+                                            configure router automation, apply the staged baseline, and validate.
+        task mikrotik:backup            -> Create a sensitive RouterOS export and encrypted binary backup.
+        task mikrotik:configure         -> Render, upload, and import the staged RouterOS baseline.
+
+        --------------------------------------------------------------
         Proxmox helper scripts
         --------------------------------------------------------------
         task proxmox_scripts:code-server:install -> Install code-server using the reviewed static repo script.
@@ -279,10 +292,10 @@ tasks:
       - task: ssh:key:ensure
 
   homelab:configure:
-    desc: Capture Proxmox host configuration, bootstrap SSH access, and prepare the Proxmox API automation account.
+    desc: Configure MikroTik, capture Proxmox host configuration, bootstrap SSH access, and prepare automation accounts.
     cmds:
+      - task: mikrotik:setup
       - task: proxmox:api:ensure
-      - task: technitium:setup
 
   homelab:validate:
     desc: Run final health checks, then write the setup marker.

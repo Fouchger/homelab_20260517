@@ -13,21 +13,29 @@
   when: ansible_facts["os_family"] == "Debian"
 
 - name: Detect Technitium process
-  ansible.builtin.shell:
-    cmd: |
-      set -euo pipefail
+  ansible.builtin.shell: |
+    set -euo pipefail
 
-      if pgrep -fa technitium >/dev/null 2>&1; then
-        echo "technitium"
+    for service_name in {{ technitium_service_candidates | join(' ') }}; do
+      if systemctl list-unit-files "${service_name}.service" --no-legend 2>/dev/null | grep -q "${service_name}.service"; then
+        printf '%s\n' "${service_name}"
         exit 0
       fi
+    done
 
-      if ss -lntup | grep -q ':53 '; then
-        echo "dns-port-active"
-        exit 0
-      fi
+    if pgrep -fa technitium >/dev/null 2>&1; then
+      echo "technitium"
+      exit 0
+    fi
 
-      exit 1
+    if ss -lntup | grep -q ':53 '; then
+      echo "dns-port-active"
+      exit 0
+    fi
+
+    exit 1
+  args:
+    executable: /bin/bash
   register: technitium_process_check
   changed_when: false
   failed_when: technitium_process_check.rc != 0
@@ -46,6 +54,7 @@
     enabled: true
     state: started
     daemon_reload: true
+  when: technitium_runtime_name != "dns-port-active"
 
 
 - name: Allow SSH through UFW
