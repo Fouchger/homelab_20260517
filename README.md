@@ -64,21 +64,11 @@ The inventory is now used as an SSH inventory rather than an Ansible execution t
 
 ## Secrets model
 
-Secrets are managed with SOPS and age. The repository uses one encrypted password file and the default SOPS age key location.
-
-Main encrypted password file:
+Secrets are managed with SOPS and age. The main encrypted password file is:
 
 ```text
 state/secrets/passwords/passwords.enc.env
 ```
-
-Default SOPS age key:
-
-```text
-${HOME}/.config/sops/age/keys.txt
-```
-
-The repo no longer keeps a private age key under `state/secrets/sops/`. The `state/secrets/sops/recipients.txt` file is derived from the default key and is not a second key.
 
 Runtime plaintext files are temporary and should be removed with:
 

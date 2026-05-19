@@ -29,7 +29,7 @@ REMOTE_AUTHORIZED_KEY_FILE=""
 INVENTORY_MANAGER_SCRIPT="${INVENTORY_MANAGER_SCRIPT:-scripts/lib/inventory-manager.py}"
 ANSIBLE_INVENTORY_FILE="${ANSIBLE_INVENTORY_FILE:-state/ansible/inventory.yml}"
 PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:-state/secrets/passwords/passwords.enc.env}"
-SOPS_AGE_RECIPIENTS_FILE="${SOPS_AGE_RECIPIENTS_FILE:-state/secrets/sops/recipients.txt}"
+SOPS_AGE_RECIPIENTS_FILE="${SOPS_AGE_RECIPIENTS_FILE:-state/secrets/passwords/sops-age-recipient.txt}"
 HOMELAB_LXC_INVENTORY_GROUP="${HOMELAB_LXC_INVENTORY_GROUP:-lxc}"
 
 get_env_value() {

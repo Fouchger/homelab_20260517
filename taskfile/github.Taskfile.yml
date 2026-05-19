@@ -293,7 +293,7 @@ tasks:
             return 1
           fi
 
-          if ! SOPS_AGE_KEY_FILE="$age_key_file" sops --encrypt --age "$recipient" --input-type dotenv --output-type dotenv "$runtime_file" > "$tmp_file"; then
+          if ! SOPS_AGE_KEY_FILE="$age_key_file" sops --encrypt --age "$recipient" --filename-override "$encrypted_file" --input-type dotenv --output-type dotenv "$runtime_file" > "$tmp_file"; then
             rm -f "$tmp_file"
             echo "ERROR: Could not encrypt ${encrypted_file}." >&2
             return 1

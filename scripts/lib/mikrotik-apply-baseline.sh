@@ -6,16 +6,17 @@
 #   admin credentials after the scripted admin password rotation.
 # Notes:
 #   - Uses the current admin password for the import.
-#   - After a successful import, MIKROTIK_ADMIN_PASSWORD is replaced with the
-#     generated MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD} in SOPS.
+#   - After a successful import, MIKROTIK_ADMIN_PASSWORD is refreshed in SOPS.
+#     MIKROTIK_ADMIN_NEW_PASSWORD is optional; when absent, the current admin
+#     password is retained.
 # ===============================================================================
 
 set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:?ROOT_DIR is required}"
 PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:?PASSWORDS_ENCRYPTED_FILE is required}"
-SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-${HOME}/.config/sops/age/keys.txt}"
-SOPS_AGE_RECIPIENTS_FILE="${SOPS_AGE_RECIPIENTS_FILE:-${ROOT_DIR}/state/secrets/sops/recipients.txt}"
+SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:?SOPS_AGE_KEY_FILE is required}"
+SOPS_AGE_RECIPIENTS_FILE="${SOPS_AGE_RECIPIENTS_FILE:?SOPS_AGE_RECIPIENTS_FILE is required}"
 
 # shellcheck source=/dev/null
 source "${ROOT_DIR}/scripts/lib/mikrotik-common.sh"
@@ -38,7 +39,8 @@ trap 'rm -f "$plain_file"' EXIT
 decrypt_password_file "$plain_file"
 mikrotik_read_connection "$plain_file"
 
-if [[ -z "${MIKROTIK_ADMIN_PASSWORD}" || -z "${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}" ]]; then
+admin_target_password="${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}"
+if [[ -z "${MIKROTIK_ADMIN_PASSWORD}" || -z "${admin_target_password}" ]]; then
   echo 'ERROR: MikroTik admin credentials are incomplete. Run: task mikrotik:credentials' >&2
   exit 1
 fi
@@ -54,8 +56,7 @@ mikrotik_scp_admin_to_router "$baseline_file" "$remote_baseline_file"
 mikrotik_ssh_admin "/import file-name=${remote_baseline_file}"
 
 # The import rotated the admin password. Persist that as the current admin password.
-admin_effective_password="${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}"
-set_or_append_dotenv_value "$plain_file" MIKROTIK_ADMIN_PASSWORD "$admin_effective_password"
+set_or_append_dotenv_value "$plain_file" MIKROTIK_ADMIN_PASSWORD "$admin_target_password"
 SOPS_AGE_RECIPIENTS_FILE="$SOPS_AGE_RECIPIENTS_FILE" encrypt_password_file "$plain_file"
 
 echo 'MikroTik staged baseline imported successfully and SOPS admin password was updated.'

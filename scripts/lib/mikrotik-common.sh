@@ -124,6 +124,8 @@ mikrotik_read_connection() {
   MIKROTIK_HOST="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_HOST || true)"
   MIKROTIK_ADMIN_USER="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_ADMIN_USER || true)"
   MIKROTIK_ADMIN_PASSWORD="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_ADMIN_PASSWORD || true)"
+  MIKROTIK_ADMIN_NEW_PASSWORD="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_ADMIN_NEW_PASSWORD || true)"
+  MIKROTIK_ADMIN_EFFECTIVE_PASSWORD="${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}"
   MIKROTIK_AUTOMATION_USER="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_AUTOMATION_USER || true)"
   MIKROTIK_AUTOMATION_PASSWORD="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_AUTOMATION_PASSWORD || true)"
   MIKROTIK_BACKUP_PASSWORD="$(extract_dotenv_value_from_file "$plain_file" MIKROTIK_BACKUP_PASSWORD || true)"

@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:?ROOT_DIR is required}"
 PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:?PASSWORDS_ENCRYPTED_FILE is required}"
-SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-${HOME}/.config/sops/age/keys.txt}"
+SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:?SOPS_AGE_KEY_FILE is required}"
 
 # shellcheck source=/dev/null
 source "${ROOT_DIR}/scripts/lib/mikrotik-common.sh"
@@ -24,7 +24,8 @@ trap 'rm -f "$plain_file"' EXIT
 decrypt_password_file "$plain_file"
 mikrotik_read_connection "$plain_file"
 
-if [[ -z "${MIKROTIK_AUTOMATION_PASSWORD}" || -z "${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}" ]]; then
+admin_target_password="${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}"
+if [[ -z "${MIKROTIK_AUTOMATION_PASSWORD}" || -z "${admin_target_password}" ]]; then
   echo 'ERROR: MikroTik generated passwords are missing. Run: task mikrotik:credentials' >&2
   exit 1
 fi
@@ -35,7 +36,7 @@ mkdir -p "$output_dir"
 chmod 700 "$output_dir"
 
 automation_password_escaped="$(routeros_escape "${MIKROTIK_AUTOMATION_PASSWORD}")"
-admin_new_password_escaped="$(routeros_escape "${MIKROTIK_ADMIN_NEW_PASSWORD:-${MIKROTIK_ADMIN_PASSWORD}}")"
+admin_new_password_escaped="$(routeros_escape "${admin_target_password}")"
 backup_password_escaped="$(routeros_escape "${MIKROTIK_BACKUP_PASSWORD}")"
 
 cat > "$output_file" <<EOFBASE

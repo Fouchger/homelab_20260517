@@ -177,10 +177,10 @@ tasks:
         decrypt_env_value() {
           decrypt_key="$1"
           [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || return 0
-          [ -f "{{.SOPS_AGE_KEY_FILE}}" ] || return 0
+          [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || return 0
 
           temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
-          if ! SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
+          if ! SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
             rm -f "$temp_plain"
             return 0
           fi
@@ -196,7 +196,7 @@ tasks:
           temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
           temp_next="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords-next.XXXXXX')"
 
-          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain"
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain"
           chmod 600 "$temp_plain"
 
           if grep -Eq "^${secret_key}=" "$temp_plain"; then
@@ -206,7 +206,7 @@ tasks:
             printf '%s=%s\n' "$secret_key" "$secret_value" >> "$temp_plain"
           fi
 
-          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --encrypt --age "$(cat '{{.SOPS_AGE_RECIPIENTS_FILE}}')" --filename-override '{{.PASSWORDS_ENCRYPTED_FILE}}' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENCRYPTED_FILE}}'
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --encrypt --age "$(cat '{{.SOPS_AGE_RECIPIENTS_FILE}}')" --filename-override '{{.PASSWORDS_ENCRYPTED_FILE}}' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENCRYPTED_FILE}}'
           chmod 600 '{{.PASSWORDS_ENCRYPTED_FILE}}'
           rm -f "$temp_plain" "$temp_next"
         }
@@ -385,10 +385,10 @@ tasks:
         decrypt_env_value() {
           decrypt_key="$1"
           [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || return 0
-          [ -f "{{.SOPS_AGE_KEY_FILE}}" ] || return 0
+          [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || return 0
 
           temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
-          if ! SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
+          if ! SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
             rm -f "$temp_plain"
             return 0
           fi
@@ -404,7 +404,7 @@ tasks:
           temp_plain="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords.XXXXXX')"
           temp_next="$(mktemp '{{.PROXMOX_TMP_DIR}}/passwords-next.XXXXXX')"
 
-          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain"
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain"
           chmod 600 "$temp_plain"
 
           if grep -Eq "^${secret_key}=" "$temp_plain"; then
@@ -414,7 +414,7 @@ tasks:
             printf '%s=%s\n' "$secret_key" "$secret_value" >> "$temp_plain"
           fi
 
-          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --encrypt --age "$(cat '{{.SOPS_AGE_RECIPIENTS_FILE}}')" --filename-override '{{.PASSWORDS_ENCRYPTED_FILE}}' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENCRYPTED_FILE}}'
+          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --encrypt --age "$(cat '{{.SOPS_AGE_RECIPIENTS_FILE}}')" --filename-override '{{.PASSWORDS_ENCRYPTED_FILE}}' --input-type dotenv --output-type dotenv "$temp_plain" > '{{.PASSWORDS_ENCRYPTED_FILE}}'
           chmod 600 '{{.PASSWORDS_ENCRYPTED_FILE}}'
           rm -f "$temp_plain" "$temp_next"
         }
@@ -427,7 +427,7 @@ tasks:
 
         [ -f '{{.CONFIG_ENV_FILE}}' ] || { echo 'ERROR: Missing state/config/.env. Run ./install.sh first.' >&2; exit 1; }
         [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || { echo 'ERROR: Missing encrypted password file. Run task passwords:setup.' >&2; exit 1; }
-        [ -f "{{.SOPS_AGE_KEY_FILE}}" ] || { echo 'ERROR: Missing SOPS age key. Run task passwords:setup.' >&2; exit 1; }
+        [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || { echo 'ERROR: Missing SOPS age key. Run task passwords:setup.' >&2; exit 1; }
         [ -f '{{.SOPS_AGE_RECIPIENTS_FILE}}' ] || { echo 'ERROR: Missing SOPS age recipient. Run task passwords:setup.' >&2; exit 1; }
 
         proxmox_ssh_host="${PROXMOX_SSH_HOST:-$(get_env_value PROXMOX_SSH_HOST)}"
@@ -562,9 +562,9 @@ tasks:
         decrypt_env_value() {
           decrypt_key="$1"
           [ -f '{{.PASSWORDS_ENCRYPTED_FILE}}' ] || return 0
-          [ -f "{{.SOPS_AGE_KEY_FILE}}" ] || return 0
+          [ -f '{{.SOPS_AGE_KEY_FILE}}' ] || return 0
           temp_plain="$(mktemp)"
-          if ! SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
+          if ! SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' sops --decrypt --input-type dotenv --output-type dotenv '{{.PASSWORDS_ENCRYPTED_FILE}}' > "$temp_plain" 2>/dev/null; then
             rm -f "$temp_plain"
             return 0
           fi
