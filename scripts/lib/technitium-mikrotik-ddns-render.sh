@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:?ROOT_DIR is required}"
 PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:?PASSWORDS_ENCRYPTED_FILE is required}"
-SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:?SOPS_AGE_KEY_FILE is required}"
+SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-${HOME}/.config/sops/age/keys.txt}"
 TEMPLATE_FILE="${ROOT_DIR}/scripts/templates/routeros/technitium-dhcp-ddns.rsc.template"
 OUTPUT_DIR="${ROOT_DIR}/state/generated/routeros"
 OUTPUT_FILE="${OUTPUT_DIR}/technitium-dhcp-ddns.rsc"

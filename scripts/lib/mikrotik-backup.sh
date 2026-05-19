@@ -11,7 +11,7 @@ set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:?ROOT_DIR is required}"
 PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:?PASSWORDS_ENCRYPTED_FILE is required}"
-SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:?SOPS_AGE_KEY_FILE is required}"
+SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-${HOME}/.config/sops/age/keys.txt}"
 
 # shellcheck source=/dev/null
 source "${ROOT_DIR}/scripts/lib/mikrotik-common.sh"

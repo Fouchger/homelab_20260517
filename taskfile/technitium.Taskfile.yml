@@ -147,7 +147,7 @@ tasks:
       - |
         set -euo pipefail
         PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
           '{{.ROOT_DIR}}/scripts/lib/technitium-credentials.sh'
 
@@ -160,7 +160,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           ANSIBLE_INVENTORY_FILE='{{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}' \
           '{{.ROOT_DIR}}/scripts/lib/technitium-run-playbook.sh'
 
@@ -172,7 +172,7 @@ tasks:
       - |
         set -euo pipefail
         PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
           TECHNITIUM_PRIMARY_URL='http://192.168.30.2:5380' \
           '{{.ROOT_DIR}}/scripts/lib/technitium-api-token.sh'
@@ -186,7 +186,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           '{{.ROOT_DIR}}/scripts/lib/technitium-mikrotik-ddns-render.sh'
 
   dhcp-sync:show:
@@ -212,7 +212,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           MIKROTIK_DEFAULT_HOST='192.168.20.1' \
           MIKROTIK_DEFAULT_USER='admin' \
           '{{.ROOT_DIR}}/scripts/lib/technitium-mikrotik-ddns-deploy.sh'

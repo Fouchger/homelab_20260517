@@ -70,7 +70,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
           '{{.ROOT_DIR}}/scripts/lib/mikrotik-credentials.sh'
 
@@ -83,7 +83,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           '{{.ROOT_DIR}}/scripts/lib/mikrotik-backup.sh'
 
   render:
@@ -95,7 +95,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           '{{.ROOT_DIR}}/scripts/lib/mikrotik-render-baseline.sh'
 
   configure:
@@ -107,7 +107,7 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
           '{{.ROOT_DIR}}/scripts/lib/mikrotik-apply-baseline.sh'
 
@@ -120,5 +120,5 @@ tasks:
         set -euo pipefail
         ROOT_DIR='{{.ROOT_DIR}}' \
           PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_KEY_FILE}}' \
+          SOPS_AGE_KEY_FILE="{{.SOPS_AGE_KEY_FILE}}" \
           '{{.ROOT_DIR}}/scripts/lib/mikrotik-validate.sh'
