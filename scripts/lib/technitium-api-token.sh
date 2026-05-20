@@ -20,65 +20,26 @@ TECHNITIUM_DHCP_SYNC_TOKEN_NAME="${TECHNITIUM_DHCP_SYNC_TOKEN_NAME:-homelab-mikr
 TECHNITIUM_DHCP_SYNC_USER="${TECHNITIUM_DHCP_SYNC_USER:-mikrotik-ddns}"
 TECHNITIUM_DHCP_SYNC_TOKEN_FORCE="${TECHNITIUM_DHCP_SYNC_TOKEN_FORCE:-0}"
 
-require_command() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "ERROR: Required command not found: $1" >&2
-    exit 1
-  }
-}
-
-dotenv_quote() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '"%s"' "$value"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/secrets-dotenv.sh
+source "${SCRIPT_DIR}/secrets-dotenv.sh"
 
 extract_dotenv_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^"|"$/, "")
-      gsub(/\\"/, "\"")
-      gsub(/\\\\/, "\\")
-      print
-      exit
-    }
-  ' "$plain_file"
+  secrets_dotenv_read_value_from_file "$plain_file" "$1"
 }
 
 upsert_secret() {
-  local key="$1"
-  local value="$2"
-  local quoted_value
-  quoted_value="$(dotenv_quote "$value")"
-
-  if grep -Eq "^${key}=" "$plain_file"; then
-    awk -v key="$key" -v value="$quoted_value" 'BEGIN { FS = OFS = "=" } $1 == key { $0 = key "=" value } { print }' "$plain_file" > "$next_file"
-    mv "$next_file" "$plain_file"
-  else
-    printf '%s=%s\n' "$key" "$quoted_value" >> "$plain_file"
-  fi
+  secrets_dotenv_upsert_file "$plain_file" "$1" "$2"
 }
 
-require_command sops
-require_command awk
+secrets_dotenv_require_write_config
 require_command python3
-require_command cat
-
-if [[ ! -f "$PASSWORDS_ENCRYPTED_FILE" ]]; then
-  echo "ERROR: Missing encrypted password file: ${PASSWORDS_ENCRYPTED_FILE}" >&2
-  echo "Run: task passwords:setup" >&2
-  exit 1
-fi
 
 plain_file="$(mktemp)"
 next_file="$(mktemp)"
 trap 'rm -f "$plain_file" "$next_file"' EXIT
 
-SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --decrypt --input-type dotenv --output-type dotenv "$PASSWORDS_ENCRYPTED_FILE" > "$plain_file"
-chmod 600 "$plain_file"
+secrets_dotenv_decrypt_to_file "$plain_file"
 
 admin_user="$(extract_dotenv_value TECHNITIUM_ADMIN_USER || true)"
 admin_password="$(extract_dotenv_value TECHNITIUM_ADMIN_PASSWORD || true)"
@@ -256,14 +217,6 @@ fi
 
 upsert_secret TECHNITIUM_DHCP_SYNC_TOKEN "$new_token"
 
-SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --encrypt \
-  --age "$(cat "$SOPS_AGE_RECIPIENTS_FILE")" \
-  --filename-override "$PASSWORDS_ENCRYPTED_FILE" \
-  --input-type dotenv \
-  --output-type dotenv \
-  "$plain_file" > "$next_file"
-
-mv "$next_file" "$PASSWORDS_ENCRYPTED_FILE"
-chmod 600 "$PASSWORDS_ENCRYPTED_FILE"
+secrets_dotenv_encrypt_from_file "$plain_file"
 
 echo 'Technitium DHCP sync API token is present in the encrypted password file.'

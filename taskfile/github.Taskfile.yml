@@ -192,6 +192,12 @@ tasks:
         age_key_file="{{.SOPS_AGE_KEY_FILE}}"
         age_recipients_file="{{.SOPS_AGE_RECIPIENTS_FILE}}"
 
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/secrets-dotenv.sh"
+        export PASSWORDS_ENCRYPTED_FILE="$encrypted_file"
+        export SOPS_AGE_KEY_FILE="$age_key_file"
+        export SOPS_AGE_RECIPIENTS_FILE="$age_recipients_file"
+
         if [[ ! -f "$config_file" ]]; then
           echo "ERROR: Missing config file: ${config_file}" >&2
           echo "Run ./install.sh first. Only install.sh may create this file." >&2
@@ -242,8 +248,7 @@ tasks:
         }
 
         decrypt_password_file() {
-          SOPS_AGE_KEY_FILE="$age_key_file" sops --decrypt --input-type dotenv --output-type dotenv "$encrypted_file" > "$runtime_file"
-          chmod 600 "$runtime_file"
+          secrets_dotenv_decrypt_to_file "$runtime_file"
         }
 
         get_password_value() {
@@ -280,28 +285,15 @@ tasks:
             return 1
           fi
 
-          grep -v -E "^${key}=" "$runtime_file" > "$tmp_file" || true
-          printf '%s=%s\n' "$key" "$(env_quote "$value")" >> "$tmp_file"
-          cat "$tmp_file" > "$runtime_file"
-          chmod 600 "$runtime_file"
+          secrets_dotenv_upsert_file "$runtime_file" "$key" "$value"
 
-          recipient="$(tr -d '[:space:]' < "$age_recipients_file")"
-
-          if [[ -z "$recipient" ]]; then
-            rm -f "$tmp_file"
-            echo "ERROR: Empty SOPS Age recipient file: ${age_recipients_file}" >&2
-            return 1
-          fi
-
-          if ! SOPS_AGE_KEY_FILE="$age_key_file" sops --encrypt --age "$recipient" --filename-override "$encrypted_file" --input-type dotenv --output-type dotenv "$runtime_file" > "$tmp_file"; then
+          if ! secrets_dotenv_encrypt_from_file "$runtime_file"; then
             rm -f "$tmp_file"
             echo "ERROR: Could not encrypt ${encrypted_file}." >&2
             return 1
           fi
 
-          cat "$tmp_file" > "$encrypted_file"
           rm -f "$tmp_file"
-          chmod 600 "$encrypted_file"
         }
 
         read_secret_from_tty() {
@@ -382,6 +374,11 @@ tasks:
         runtime_file="{{.PASSWORDS_RUNTIME_FILE}}"
         age_key_file="{{.SOPS_AGE_KEY_FILE}}"
 
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/scripts/lib/secrets-dotenv.sh"
+        export PASSWORDS_ENCRYPTED_FILE="$encrypted_file"
+        export SOPS_AGE_KEY_FILE="$age_key_file"
+
         trap 'rm -f "$runtime_file"' EXIT
 
         # shellcheck source=/dev/null
@@ -401,8 +398,7 @@ tasks:
           local key="$1"
 
           if [[ -f "$encrypted_file" ]] && [[ -f "$age_key_file" ]] && grep -Eq '^(sops_|sops:)' "$encrypted_file" && command -v sops >/dev/null 2>&1; then
-            SOPS_AGE_KEY_FILE="$age_key_file" sops --decrypt --input-type dotenv --output-type dotenv "$encrypted_file" > "$runtime_file" 2>/dev/null || return 1
-            chmod 600 "$runtime_file"
+            secrets_dotenv_decrypt_to_file "$runtime_file" 2>/dev/null || return 1
             [[ -n "$(bash -c 'set -a; source "$1"; printf "%s" "${!2-}"' _ "$runtime_file" "$key")" ]]
           else
             return 1

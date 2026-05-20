@@ -272,16 +272,16 @@ tasks:
         fi
 
         load_passwords_if_available() {
-          if [[ ! -f "$password_file" ]] || ! command -v sops >/dev/null 2>&1; then
+          if [[ ! -f "$password_file" ]] || [[ ! -f "$age_key_file" ]]; then
             return 0
           fi
+          # shellcheck source=/dev/null
+          source "${ROOT_DIR}/scripts/lib/secrets-dotenv.sh"
+          export PASSWORDS_ENCRYPTED_FILE="$password_file"
+          export SOPS_AGE_KEY_FILE="$age_key_file"
+
           password_runtime_file="$(mktemp)"
-          chmod 600 "$password_runtime_file"
-          if [[ -f "$age_key_file" ]]; then
-            SOPS_AGE_KEY_FILE="$age_key_file" sops --decrypt --input-type dotenv --output-type dotenv "$password_file" > "$password_runtime_file" 2>/dev/null || true
-          else
-            sops --decrypt --input-type dotenv --output-type dotenv "$password_file" > "$password_runtime_file" 2>/dev/null || true
-          fi
+          secrets_dotenv_decrypt_to_file "$password_runtime_file" 2>/dev/null || true
         }
 
         read_password_value() {

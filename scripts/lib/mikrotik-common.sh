@@ -10,91 +10,28 @@
 
 set -euo pipefail
 
-require_command() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "ERROR: Required command not found: $1" >&2
-    exit 1
-  }
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/secrets-dotenv.sh
+source "${SCRIPT_DIR}/secrets-dotenv.sh"
 
 extract_dotenv_value_from_file() {
-  local file_path="$1"
-  local key="$2"
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^"|"$/, "")
-      gsub(/\\"/, "\"")
-      gsub(/\\\\/, "\\")
-      print
-      exit
-    }
-  ' "$file_path"
+  secrets_dotenv_read_value_from_file "$@"
 }
 
 quote_dotenv_value() {
-  local value="$1"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '"%s"' "$value"
+  secrets_dotenv_quote_value "$@"
 }
 
 set_or_append_dotenv_value() {
-  local file_path="$1"
-  local key="$2"
-  local value="$3"
-  local quoted_value
-  quoted_value="$(quote_dotenv_value "$value")"
-
-  if grep -q "^${key}=" "$file_path"; then
-    python3 - "$file_path" "$key" "$quoted_value" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-key = sys.argv[2]
-value = sys.argv[3]
-lines = path.read_text().splitlines()
-out = []
-updated = False
-for line in lines:
-    if line.startswith(key + '='):
-        out.append(f'{key}={value}')
-        updated = True
-    else:
-        out.append(line)
-if not updated:
-    out.append(f'{key}={value}')
-path.write_text('\n'.join(out) + '\n')
-PY
-  else
-    printf '%s=%s\n' "$key" "$quoted_value" >> "$file_path"
-  fi
+  secrets_dotenv_upsert_file "$@"
 }
 
 decrypt_password_file() {
-  local output_file="$1"
-  require_command sops
-  if [[ ! -f "${PASSWORDS_ENCRYPTED_FILE}" ]]; then
-    echo "ERROR: Encrypted password file does not exist: ${PASSWORDS_ENCRYPTED_FILE}" >&2
-    exit 1
-  fi
-  SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE}" sops --decrypt --input-type dotenv --output-type dotenv "${PASSWORDS_ENCRYPTED_FILE}" > "$output_file"
-  chmod 600 "$output_file"
+  secrets_dotenv_decrypt_to_file "$@"
 }
 
 encrypt_password_file() {
-  local input_file="$1"
-  local next_file
-  require_command sops
-  next_file="$(mktemp)"
-  SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE}" sops --encrypt \
-    --age "$(cat "${SOPS_AGE_RECIPIENTS_FILE}")" \
-    --filename-override "${PASSWORDS_ENCRYPTED_FILE}" \
-    --input-type dotenv \
-    --output-type dotenv \
-    "$input_file" > "$next_file"
-  mv "$next_file" "${PASSWORDS_ENCRYPTED_FILE}"
-  chmod 600 "${PASSWORDS_ENCRYPTED_FILE}"
+  secrets_dotenv_encrypt_from_file "$@"
 }
 
 ensure_sshpass() {

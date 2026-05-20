@@ -27,17 +27,7 @@ require_command() {
 }
 
 extract_dotenv_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^"|"$/, "")
-      gsub(/\\"/, "\"")
-      gsub(/\\\\/, "\\")
-      print
-      exit
-    }
-  ' "$plain_file"
+  secrets_dotenv_read_value_from_file "$plain_file" "$1"
 }
 
 require_command sops
@@ -53,8 +43,7 @@ fi
 
 plain_file="$(mktemp)"
 trap 'rm -f "$plain_file"' EXIT
-SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --decrypt --input-type dotenv --output-type dotenv "$PASSWORDS_ENCRYPTED_FILE" > "$plain_file"
-chmod 600 "$plain_file"
+secrets_dotenv_decrypt_to_file "$plain_file"
 
 mikrotik_host="$(extract_dotenv_value MIKROTIK_HOST || true)"
 mikrotik_user="$(extract_dotenv_value MIKROTIK_SSH_USER || true)"

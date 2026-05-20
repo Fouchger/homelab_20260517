@@ -15,6 +15,10 @@ PASSWORDS_ENCRYPTED_FILE="${PASSWORDS_ENCRYPTED_FILE:?PASSWORDS_ENCRYPTED_FILE i
 SOPS_AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:?SOPS_AGE_KEY_FILE is required}"
 ANSIBLE_INVENTORY_FILE="${ANSIBLE_INVENTORY_FILE:?ANSIBLE_INVENTORY_FILE is required}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/secrets-dotenv.sh
+source "${SCRIPT_DIR}/secrets-dotenv.sh"
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: Required command not found: $1" >&2
@@ -23,17 +27,7 @@ require_command() {
 }
 
 extract_dotenv_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^"|"$/, "")
-      gsub(/\\"/, "\"")
-      gsub(/\\\\/, "\\")
-      print
-      exit
-    }
-  ' "$plain_file"
+  secrets_dotenv_read_value_from_file "$plain_file" "$1"
 }
 
 yaml_quote() {
@@ -110,8 +104,7 @@ plain_file="$(mktemp)"
 extra_vars_file="$(mktemp)"
 trap 'rm -f "$plain_file" "$extra_vars_file"' EXIT
 
-SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --decrypt --input-type dotenv --output-type dotenv "$PASSWORDS_ENCRYPTED_FILE" > "$plain_file"
-chmod 600 "$plain_file"
+secrets_dotenv_decrypt_to_file "$plain_file"
 
 admin_user="$(extract_dotenv_value TECHNITIUM_ADMIN_USER)"
 initial_password="$(extract_dotenv_value TECHNITIUM_INITIAL_PASSWORD)"

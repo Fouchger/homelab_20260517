@@ -18,6 +18,10 @@ TEMPLATE_FILE="${ROOT_DIR}/scripts/templates/routeros/technitium-dhcp-ddns.rsc.t
 OUTPUT_DIR="${ROOT_DIR}/state/generated/routeros"
 OUTPUT_FILE="${OUTPUT_DIR}/technitium-dhcp-ddns.rsc"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/secrets-dotenv.sh
+source "${SCRIPT_DIR}/secrets-dotenv.sh"
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "ERROR: Required command not found: $1" >&2
@@ -26,25 +30,14 @@ require_command() {
 }
 
 extract_dotenv_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^"|"$/, "")
-      gsub(/\\"/, "\"")
-      gsub(/\\\\/, "\\")
-      print
-      exit
-    }
-  ' "$plain_file"
+  secrets_dotenv_read_value_from_file "$plain_file" "$1"
 }
 
 escape_sed_replacement() {
   sed -e 's/[\\&]/\\&/g'
 }
 
-require_command sops
-require_command awk
+secrets_dotenv_require_read_config
 require_command sed
 
 if [[ ! -f "$TEMPLATE_FILE" ]]; then
@@ -52,17 +45,10 @@ if [[ ! -f "$TEMPLATE_FILE" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$PASSWORDS_ENCRYPTED_FILE" ]]; then
-  echo "ERROR: Missing encrypted password file: ${PASSWORDS_ENCRYPTED_FILE}" >&2
-  echo "Run: task passwords:setup" >&2
-  exit 1
-fi
-
 plain_file="$(mktemp)"
 trap 'rm -f "$plain_file"' EXIT
 
-SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --decrypt --input-type dotenv --output-type dotenv "$PASSWORDS_ENCRYPTED_FILE" > "$plain_file"
-chmod 600 "$plain_file"
+secrets_dotenv_decrypt_to_file "$plain_file"
 
 sync_token="$(extract_dotenv_value TECHNITIUM_DHCP_SYNC_TOKEN || true)"
 
