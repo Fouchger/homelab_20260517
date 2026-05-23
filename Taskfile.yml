@@ -188,6 +188,8 @@ tasks:
         task mikrotik:bootstrap        -> Create/update the RouterOS automation user and switch inventory
                                             to key-based SSH.
         task mikrotik:verify           -> Test key-based SSH for MikroTik routers.
+        task mikrotik:backup           -> Create sensitive RouterOS exports and encrypted binary backups
+                                            under state/backups/mikrotik/<timestamp>/.
 
         --------------------------------------------------------------
         Health and capability reporting
@@ -274,7 +276,7 @@ tasks:
       - task: homelab:bootstrap
       - task: homelab:configure
       - task: homelab:validate
-      - task: mikrotik:bootstrap
+      - task: homelab:mikrotik
       - task: homelab:lxc_creation
 
   homelab:bootstrap:
@@ -323,6 +325,12 @@ tasks:
     cmds:
       - task: proxmox_scripts:technitiumdns:ensure
     
+  homelab:mikrotik:
+    desc: mikrotik setup
+    cmds:
+      - task: mikrotik:bootstrap
+      - task: mikrotik:verify
+      - task: mikrotik:backup
 
   ci:
     desc: Run safe static validation checks for shell, Python, and YAML files.

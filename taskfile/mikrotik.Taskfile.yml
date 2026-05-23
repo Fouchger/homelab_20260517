@@ -18,6 +18,10 @@ vars:
   MIKROTIK_GROUP: '{{.MIKROTIK_GROUP | default "mikrotik"}}'
   MIKROTIK_AUTOMATION_USER: '{{.MIKROTIK_AUTOMATION_USER | default "homelab"}}'
   MIKROTIK_BOOTSTRAP_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-bootstrap.sh'
+  MIKROTIK_BACKUP_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-backup.sh'
+  MIKROTIK_BACKUP_PLAYBOOK: 'ansible/playbooks/mikrotik-backup.yml'
+  MIKROTIK_BACKUP_DIR: '{{.BACKUP_DIR}}/mikrotik'
+  MIKROTIK_BACKUP_PASSWORD_VAR: '{{.MIKROTIK_BACKUP_PASSWORD_VAR | default "MIKROTIK_BACKUP_PASSWORD"}}'
 
 tasks:
   default:
@@ -57,6 +61,12 @@ tasks:
 
           task mikrotik:verify
             Test key-based SSH to routers in the mikrotik inventory group.
+
+          task mikrotik:backup
+            Create a sensitive RouterOS text export and encrypted binary backup
+            for each MikroTik router. Backups are stored below
+            state/backups/mikrotik/<timestamp>/. The backup encryption password
+            is stored in SOPS as MIKROTIK_BACKUP_PASSWORD.
         EOHELP
 
   setup:
@@ -191,6 +201,43 @@ tasks:
           --ssh-key-file "${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" \
           --group "{{.MIKROTIK_GROUP}}" \
           --automation-user "{{.MIKROTIK_AUTOMATION_USER}}"
+
+  backup:
+    desc: Create sensitive RouterOS text exports and encrypted binary backups.
+    deps:
+      - :passwords:encrypt
+      - :ssh:key:ensure
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Back up MikroTik RouterOS with sensitive configuration." "PEACH"
+      - |
+        set -euo pipefail
+
+        backup_script="{{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_SCRIPT}}"
+        if [[ ! -f "$backup_script" ]]; then
+          echo "ERROR: Missing MikroTik backup script: $backup_script" >&2
+          echo "       Reinstall the latest repo ZIP or restore scripts/lib/mikrotik-backup.sh." >&2
+          exit 1
+        fi
+
+        ansible-playbook "{{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_PLAYBOOK}}" \
+          -i localhost, \
+          -c local \
+          -e "ansible_python_interpreter=/usr/bin/python3" \
+          -e "homelab_repo_root={{.ROOT_DIR}}" \
+          -e "homelab_inventory_file={{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}" \
+          -e "homelab_password_file={{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          -e "homelab_age_key_file={{.SOPS_AGE_KEY_FILE}}" \
+          -e "homelab_recipients_file={{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          -e "homelab_inventory_manager={{.ROOT_DIR}}/{{.INVENTORY_MANAGER_SCRIPT}}" \
+          -e "homelab_ssh_key_file=${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" \
+          -e "mikrotik_backup_script=$backup_script" \
+          -e "mikrotik_backup_dir={{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_DIR}}" \
+          -e "mikrotik_group={{.MIKROTIK_GROUP}}" \
+          -e "mikrotik_backup_password_var={{.MIKROTIK_BACKUP_PASSWORD_VAR}}"
 
   verify:
     desc: Test key-based SSH to MikroTik routers in the mikrotik inventory group.

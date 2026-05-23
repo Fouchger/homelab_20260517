@@ -1,0 +1,56 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/mikrotik-backup.yml
+# Purpose:
+#   Run the homelab MikroTik RouterOS sensitive backup workflow from Ansible.
+# Notes:
+#   - RouterOS hosts are backed up through the local control node because the
+#     artefacts need to land in the repository state backup directory.
+#   - The helper script performs the RouterOS SSH/SCP operations and SOPS lookup.
+# ==============================================================================
+- name: Back up MikroTik RouterOS devices
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    mikrotik_group: mikrotik
+    mikrotik_backup_password_var: MIKROTIK_BACKUP_PASSWORD
+  tasks:
+    - name: Validate MikroTik backup helper exists on the control node
+      ansible.builtin.stat:
+        path: "{{ mikrotik_backup_script }}"
+      register: mikrotik_backup_script_stat
+
+    - name: Stop when the MikroTik backup helper is missing
+      ansible.builtin.fail:
+        msg: >-
+          Missing MikroTik backup helper script: {{ mikrotik_backup_script }}.
+          Reinstall the latest repository ZIP or restore scripts/lib/mikrotik-backup.sh.
+      when: not mikrotik_backup_script_stat.stat.exists
+
+    - name: Create sensitive RouterOS export and encrypted backup artefacts
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ mikrotik_backup_script }}"
+          - --inventory-file
+          - "{{ homelab_inventory_file }}"
+          - --password-file
+          - "{{ homelab_password_file }}"
+          - --age-key-file
+          - "{{ homelab_age_key_file }}"
+          - --recipients-file
+          - "{{ homelab_recipients_file }}"
+          - --inventory-manager
+          - "{{ homelab_inventory_manager }}"
+          - --ssh-key-file
+          - "{{ homelab_ssh_key_file }}"
+          - --backup-dir
+          - "{{ mikrotik_backup_dir }}"
+          - --group
+          - "{{ mikrotik_group }}"
+          - --backup-password-var
+          - "{{ mikrotik_backup_password_var }}"
+      args:
+        chdir: "{{ homelab_repo_root | default(playbook_dir + '/../..') }}"
+      changed_when: true
