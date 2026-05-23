@@ -85,7 +85,7 @@ The repository now includes a Technitium DNS Ansible baseline wired into the exi
 task technitium:setup
 ```
 
-That flow ensures the Technitium LXCs exist, syncs `dns01` and `dns02` into `state/ansible/inventory.yml`, ensures Technitium bootstrap credentials exist in `state/secrets/passwords/passwords.enc.env` without prompting, runs the Ansible playbook, creates or validates the dedicated MikroTik DHCP DDNS API token, and renders the RouterOS lease script.
+That flow ensures the Technitium LXCs exist, syncs `dns01` and `dns02` into `state/ansible/inventory.yml`, ensures Technitium bootstrap credentials exist in `state/secrets/passwords/passwords.enc.env` without prompting, and runs the Ansible playbook.
 
 Individual tasks are also available:
 
@@ -93,8 +93,6 @@ Individual tasks are also available:
 task technitium:inventory:sync
 task technitium:credentials
 task technitium:configure
-task technitium:dhcp-sync:token
-task technitium:dhcp-sync:render
 task technitium:validate
 ```
 
@@ -117,7 +115,6 @@ Secrets are not committed. The following keys are stored in the encrypted SOPS d
 TECHNITIUM_ADMIN_USER
 TECHNITIUM_INITIAL_PASSWORD
 TECHNITIUM_ADMIN_PASSWORD
-TECHNITIUM_DHCP_SYNC_TOKEN
 ```
 
 ## Health and validation

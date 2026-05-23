@@ -55,18 +55,6 @@ technitium_a_records:
   - { zone: labcore.uk, name: dns01.labcore.uk, ip: 192.168.30.2, ttl: 3600 }
   - { zone: labcore.uk, name: dns02.labcore.uk, ip: 192.168.30.3, ttl: 3600 }
 
-# DHCP lease records are intentionally isolated under dhcp.fouchger.uk.
-# MikroTik publishes them dynamically through the rendered RouterOS lease script.
-technitium_dhcp_sync_forward_zone: dhcp.fouchger.uk
-technitium_dhcp_sync_ttl: 300
-technitium_dhcp_sync_reverse_zones:
-  - 20.168.192.in-addr.arpa
-  - 30.168.192.in-addr.arpa
-  - 40.168.192.in-addr.arpa
-  - 50.168.192.in-addr.arpa
-  - 60.168.192.in-addr.arpa
-  - 70.168.192.in-addr.arpa
-  - 90.168.192.in-addr.arpa
 
 technitium_ptr_records:
   - { zone: 30.168.192.in-addr.arpa, name: 2.30.168.192.in-addr.arpa, ptr: dns01.fouchger.uk, ttl: 3600 }
@@ -84,6 +72,3 @@ technitium_validation_external_record: cloudflare.com
 technitium_split_horizon_enabled: false
 technitium_split_horizon_zones: []
 
-# MikroTik script deployment defaults. Secrets, if needed, belong in SOPS.
-technitium_mikrotik_host: 192.168.20.1
-technitium_mikrotik_user: admin

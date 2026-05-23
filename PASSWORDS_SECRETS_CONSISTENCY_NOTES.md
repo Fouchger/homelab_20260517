@@ -21,10 +21,7 @@ Centralised operations:
 
 The following areas now call the shared helper rather than carrying their own SOPS dotenv implementations:
 
-- MikroTik common helpers
 - Technitium credential bootstrap
-- Technitium API token generation
-- Technitium MikroTik DDNS render/deploy helpers
 - Technitium Ansible playbook runner
 - Proxmox Taskfile secret reads and upserts
 - GitHub Taskfile password reads and upserts
@@ -45,12 +42,4 @@ Previously, key rotation widened the rule to all dotenv files under the password
 
 ## Operational note
 
-The original MikroTik failure was not caused by SOPS decryption. The log confirmed MikroTik credentials were present in the encrypted file before SSH failed. That failure still indicates stale or mismatched MikroTik credentials on the router.
-
-Recommended recovery command sequence:
-
-```bash
-MIKROTIK_CREDENTIALS_FORCE=1 task mikrotik:credentials
-task mikrotik:configure
-task mikrotik:validate
-```
+Retired router credential recovery tasks have been removed from this repository. Use the remaining password and Technitium tasks for current operations.
