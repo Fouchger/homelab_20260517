@@ -94,6 +94,7 @@ includes:
   proxmox: ./taskfile/proxmox.Taskfile.yml
   proxmox_scripts: ./taskfile/proxmox_scripts.Taskfile.yml
   technitium: ./taskfile/technitium.Taskfile.yml
+  mikrotik: ./taskfile/mikrotik.Taskfile.yml
 
 tasks:
   default:
@@ -174,6 +175,19 @@ tasks:
         task apps:terraform             -> Install Terraform from the official HashiCorp apt repository.
         task apps:packer                -> Install Packer from the official HashiCorp apt repository.
         task apps:audit                 -> Show installed application and automation tooling status.
+
+
+        --------------------------------------------------------------
+        MikroTik RouterOS onboarding
+        --------------------------------------------------------------
+        task mikrotik:help             -> Show MikroTik onboarding task help.
+        task mikrotik:setup            -> Ask for RouterOS inventory details, create/update inventory.yml,
+                                            create the automation SSH user, install the homelab public key,
+                                            and verify key-based SSH to the router.
+        task mikrotik:inventory:add    -> Add one MikroTik router using the initial RouterOS SSH user.
+        task mikrotik:bootstrap        -> Create/update the RouterOS automation user and switch inventory
+                                            to key-based SSH.
+        task mikrotik:verify           -> Test key-based SSH for MikroTik routers.
 
         --------------------------------------------------------------
         Health and capability reporting
@@ -260,6 +274,7 @@ tasks:
       - task: homelab:bootstrap
       - task: homelab:configure
       - task: homelab:validate
+      - task: mikrotik:bootstrap
       - task: homelab:lxc_creation
 
   homelab:bootstrap:

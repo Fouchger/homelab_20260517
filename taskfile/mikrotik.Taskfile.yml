@@ -1,0 +1,239 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+---
+# ==============================================================================
+# File: taskfile/mikrotik.Taskfile.yml
+# Purpose:
+#   Capture MikroTik RouterOS inventory details and bootstrap the SSH automation
+#   user from scratch.
+# Notes:
+#   - This is intentionally independent from the generic Linux ssh-copy-id flow.
+#   - RouterOS uses /user ssh-keys rather than ~/.ssh/authorized_keys.
+#   - The bootstrap SSH user/password is used only to create the automation user
+#     and attach the homelab public SSH key.
+# ==============================================================================
+
+version: '3'
+
+vars:
+  MIKROTIK_GROUP: '{{.MIKROTIK_GROUP | default "mikrotik"}}'
+  MIKROTIK_AUTOMATION_USER: '{{.MIKROTIK_AUTOMATION_USER | default "homelab"}}'
+  MIKROTIK_BOOTSTRAP_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-bootstrap.sh'
+
+tasks:
+  default:
+    desc: Show available MikroTik tasks
+    cmds:
+      - task: tasklist
+
+  tasklist:
+    desc: Show the available MikroTik tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE}}" --list
+
+  help:
+    desc: Show MikroTik onboarding tasks
+    cmds:
+      - |
+        set -euo pipefail
+
+        cat <<'EOHELP'
+        MikroTik task help
+
+        Setup
+          task mikrotik:setup
+            Ask for RouterOS inventory details, create/update inventory.yml,
+            create the RouterOS automation user, install the homelab SSH public
+            key, and test key-based SSH as the new user.
+
+          task mikrotik:inventory:add
+            Ask for one MikroTik router and add it to state/ansible/inventory.yml
+            using the initial RouterOS SSH user. The bootstrap password is saved
+            to the standard SOPS encrypted password file before bootstrap runs.
+
+          task mikrotik:bootstrap
+            Use SCP to copy the homelab public SSH key to RouterOS 7, then use
+            SSH to create/update the automation user, import the key, test the
+            new user's SSH login, and switch inventory to the automation user.
+
+          task mikrotik:verify
+            Test key-based SSH to routers in the mikrotik inventory group.
+        EOHELP
+
+  setup:
+    desc: Capture MikroTik inventory, bootstrap automation user, and verify SSH.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Capture MikroTik inventory, bootstrap automation user, and verify SSH." "GREEN"
+      - task: :ssh:install
+      - task: :passwords:encrypt
+      - task: :ssh:key:ensure
+      - task: inventory:add
+      - task: bootstrap
+      - task: verify
+
+  inventory:add:
+    desc: Ask for one MikroTik router and add it to the SSH inventory.
+    deps:
+      - :env_create:inventory:init
+      - :passwords:encrypt
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Add MikroTik RouterOS SSH inventory details." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        password_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+        inventory_dir="{{.ANSIBLE_DIR}}"
+        group="{{.MIKROTIK_GROUP}}"
+        automation_user="{{.MIKROTIK_AUTOMATION_USER}}"
+
+        prompt_default() {
+          local label="$1"
+          local default_value="$2"
+          local value=""
+          printf '%s [%s]: ' "$label" "$default_value" > /dev/tty
+          IFS= read -r value < /dev/tty
+          printf '%s' "${value:-$default_value}"
+        }
+
+        prompt_required() {
+          local label="$1"
+          local value=""
+          while [[ -z "$value" ]]; do
+            printf '%s: ' "$label" > /dev/tty
+            IFS= read -r value < /dev/tty
+          done
+          printf '%s' "$value"
+        }
+
+        prompt_secret() {
+          local label="$1"
+          local value=""
+          printf '%s: ' "$label" > /dev/tty
+          stty -echo < /dev/tty || true
+          IFS= read -r value < /dev/tty
+          stty echo < /dev/tty || true
+          printf '\n' > /dev/tty
+          printf '%s' "$value"
+        }
+
+        env_var_from_hostname() {
+          local hostname="$1"
+          printf '%s_MIKROTIK_SSH_PASSWORD' "$hostname" | tr '[:lower:].-' '[:upper:]__' | sed -E 's/[^A-Z0-9_]/_/g; s/^([0-9])/_\1/'
+        }
+
+        mkdir -p "$inventory_dir"
+
+        hostname="$(prompt_required 'MikroTik inventory hostname')"
+        ansible_host="$(prompt_required 'MikroTik SSH IP address / DNS name')"
+        ssh_port="$(prompt_default 'MikroTik SSH port' '22')"
+        bootstrap_user="$(prompt_default 'Initial MikroTik SSH username' 'admin')"
+        echo "Automation username to create: ${automation_user}"
+        default_password_var="$(env_var_from_hostname "$hostname")"
+        ssh_password_var="$(prompt_default 'Bootstrap SSH password variable name in encrypted password file' "$default_password_var")"
+        bootstrap_password="$(prompt_secret "Bootstrap SSH password value for ${ssh_password_var} (blank to only reference existing variable)")"
+
+        if [[ -n "$ssh_password_var" && ! -f "$password_file" ]]; then
+          echo "ERROR: ${password_file} does not exist. Run: task passwords:setup" >&2
+          exit 1
+        fi
+
+        if [[ -n "$bootstrap_password" ]]; then
+          export MIKROTIK_BOOTSTRAP_PASSWORD_VALUE="$bootstrap_password"
+          password_value_env="MIKROTIK_BOOTSTRAP_PASSWORD_VALUE"
+        else
+          password_value_env=""
+        fi
+
+        python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" add-server \
+          --inventory-file "$inventory_file" \
+          --password-file "$password_file" \
+          --recipients-file "{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          --age-key-file "{{.SOPS_AGE_KEY_FILE}}" \
+          --group "$group" \
+          --hostname "$hostname" \
+          --ansible-host "$ansible_host" \
+          --ssh-user "$bootstrap_user" \
+          --ssh-password-var "$ssh_password_var" \
+          --ssh-password-value-env "$password_value_env" \
+          --device-type mikrotik \
+          --automation-user "$automation_user" \
+          --python-interpreter auto_silent \
+          --ssh-port "$ssh_port" \
+          --require-password-save
+
+  bootstrap:
+    desc: Create/update the RouterOS automation user, install SSH key, and switch inventory to key auth.
+    deps:
+      - :passwords:encrypt
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Bootstrap MikroTik RouterOS automation user." "PEACH"
+      - |
+        set -euo pipefail
+
+        bash "{{.MIKROTIK_BOOTSTRAP_SCRIPT}}" \
+          --inventory-file "{{.ANSIBLE_INVENTORY_FILE}}" \
+          --password-file "{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          --age-key-file "{{.SOPS_AGE_KEY_FILE}}" \
+          --recipients-file "{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          --inventory-manager "{{.INVENTORY_MANAGER_SCRIPT}}" \
+          --ssh-key-file "${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" \
+          --group "{{.MIKROTIK_GROUP}}" \
+          --automation-user "{{.MIKROTIK_AUTOMATION_USER}}"
+
+  verify:
+    desc: Test key-based SSH to MikroTik routers in the mikrotik inventory group.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Verify MikroTik key-based SSH." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+        group="{{.MIKROTIK_GROUP}}"
+        failures=0
+        checked=0
+
+        [[ -f "$inventory_file" ]] || { echo "ERROR: Missing inventory file: $inventory_file" >&2; exit 1; }
+        [[ -f "$key_file" ]] || { echo "ERROR: Missing SSH key file: $key_file" >&2; exit 1; }
+
+        while IFS='|' read -r name host_group host user connection port keyfile password_var; do
+          [[ -n "$name" ]] || continue
+          [[ "$host_group" == "$group" ]] || continue
+          [[ "$connection" != "local" ]] || continue
+          checked=$((checked + 1))
+          target="${user}@${host}"
+          if ssh -n -i "$key_file" -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$target" '/system identity print' >/dev/null; then
+            echo "${name}: key-based SSH verified for ${target}."
+          else
+            echo "ERROR: ${name}: key-based SSH failed for ${target}." >&2
+            failures=$((failures + 1))
+          fi
+        done < <(python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" list-ssh-hosts --inventory-file "$inventory_file")
+
+        if (( checked == 0 )); then
+          echo "No MikroTik routers found in inventory group ${group}."
+          exit 0
+        fi
+
+        if (( failures > 0 )); then
+          echo "ERROR: ${failures} MikroTik router(s) failed SSH verification." >&2
+          exit 1
+        fi
+
+        echo "MikroTik key-based SSH verified for ${checked} router(s)."

@@ -16,6 +16,7 @@ A Taskfile-driven repository for building and operating a personal Proxmox-focus
 │   ├── env_create.Taskfile.yml                 # Baseline state and SSH inventory creation
 │   ├── proxmox.Taskfile.yml                    # Proxmox API bootstrap tasks
 │   ├── proxmox_scripts.Taskfile.yml            # Proxmox helper script wrappers
+│   ├── mikrotik.Taskfile.yml                   # MikroTik RouterOS SSH automation onboarding
 │   └── ssh.Taskfile.yml                        # SSH key, copy-id, and audit tasks
 ├── scripts/
 │   ├── banner/banner.sh                        # Homelab terminal banner
@@ -116,6 +117,25 @@ TECHNITIUM_ADMIN_USER
 TECHNITIUM_INITIAL_PASSWORD
 TECHNITIUM_ADMIN_PASSWORD
 ```
+
+
+## MikroTik RouterOS onboarding
+
+MikroTik support is a fresh SSH bootstrap flow. It asks for the router inventory details, writes `state/ansible/inventory.yml`, logs in with the initial RouterOS SSH user, creates the automation user, attaches the homelab public SSH key, tests the new login, and then switches inventory to the automation user.
+
+```bash
+task mikrotik:setup
+```
+
+Individual tasks are also available:
+
+```bash
+task mikrotik:inventory:add
+task mikrotik:bootstrap
+task mikrotik:verify
+```
+
+The default automation user is `homelab`. Override it per run with `MIKROTIK_AUTOMATION_USER=...` when needed.
 
 ## Health and validation
 

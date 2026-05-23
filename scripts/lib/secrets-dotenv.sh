@@ -57,21 +57,43 @@ secrets_dotenv_quote_value() {
   printf '"%s"' "$value"
 }
 
+
+secrets_dotenv_normalise_file() {
+  local file_path="$1"
+  local next_file
+  next_file="$(mktemp)"
+  python3 - "$file_path" "$next_file" <<'PYNORMALISE'
+from pathlib import Path
+import re
+import sys
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+valid_key = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+out = []
+
+for raw_line in source.read_text().splitlines() if source.exists() else []:
+    line = raw_line.strip()
+    if not line:
+        continue
+    if line.startswith('#'):
+        continue
+    if valid_key.match(line):
+        out.append(line)
+
+target.write_text("\n".join(out) + ("\n" if out else ""))
+PYNORMALISE
+  mv "$next_file" "$file_path"
+  chmod 600 "$file_path"
+}
+
 secrets_dotenv_read_value_from_file() {
   local file_path="$1"
   local key="$2"
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^"|"$/, "")
-      gsub(/\\"/, "\"")
-      gsub(/\\\\/, "\\")
-      print
-      exit
-    }
-  ' "$file_path"
+  [[ -f "$file_path" ]] || return 0
+  secrets_dotenv_normalise_file "$file_path"
+  bash -c 'set -a; source "$1"; printf "%s" "${!2-}"' _ "$file_path" "$key"
 }
-
 secrets_dotenv_upsert_file() {
   local file_path="$1"
   local key="$2"
@@ -107,20 +129,27 @@ PY
 
 secrets_dotenv_decrypt_to_file() {
   local output_file="$1"
+  local next_file
   secrets_dotenv_require_read_config
+  next_file="$(mktemp)"
   SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --decrypt \
     --input-type dotenv \
     --output-type dotenv \
-    "$PASSWORDS_ENCRYPTED_FILE" > "$output_file"
-  if [[ "$output_file" != "/dev/stdout" ]]; then
+    "$PASSWORDS_ENCRYPTED_FILE" > "$next_file"
+  secrets_dotenv_normalise_file "$next_file"
+  if [[ "$output_file" == "/dev/stdout" ]]; then
+    cat "$next_file"
+    rm -f "$next_file"
+  else
+    mv "$next_file" "$output_file"
     chmod 600 "$output_file"
   fi
 }
-
 secrets_dotenv_encrypt_from_file() {
   local input_file="$1"
   local next_file
   secrets_dotenv_require_write_config
+  secrets_dotenv_normalise_file "$input_file"
   next_file="$(mktemp)"
   SOPS_AGE_KEY_FILE="$SOPS_AGE_KEY_FILE" sops --encrypt \
     --age "$(cat "$SOPS_AGE_RECIPIENTS_FILE")" \
