@@ -190,6 +190,12 @@ tasks:
         task mikrotik:verify           -> Test key-based SSH for MikroTik routers.
         task mikrotik:backup           -> Create sensitive RouterOS exports and encrypted binary backups
                                             under state/backups/mikrotik/<timestamp>/.
+        task mikrotik:secrets:ensure   -> Prompt for missing RouterOS configuration secrets and save them to SOPS.
+        task mikrotik:render           -> Render sensitive and redacted RouterOS baseline artefacts locally.
+        task mikrotik:plan             -> Render, export the live router config, and create redacted/sensitive diffs.
+        task mikrotik:review           -> Compare latest backup to proposed config, then optionally apply and verify.
+        task mikrotik:apply            -> Back up, plan, confirm, and import the RouterOS 7 baseline.
+        task mikrotik:configure        -> Alias for mikrotik:apply.
 
         --------------------------------------------------------------
         Health and capability reporting
@@ -331,6 +337,8 @@ tasks:
       - task: mikrotik:bootstrap
       - task: mikrotik:verify
       - task: mikrotik:backup
+      - task: mikrotik:plan
+      - task: mikrotik:review
 
   ci:
     desc: Run safe static validation checks for shell, Python, and YAML files.

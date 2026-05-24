@@ -1,0 +1,78 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router_config/tasks/main.yml
+# Purpose:
+#   Apply the homelab RouterOS 7 baseline configuration through the local control
+#   node using SSH/SCP to the MikroTik router.
+# Notes:
+#   - The role runs locally. RouterOS is not treated as a Linux Ansible target.
+#   - The helper script renders a temporary sensitive RouterOS script, uploads it,
+#     imports it, and removes the temporary files.
+# ==============================================================================
+
+- name: Validate MikroTik configuration helper exists on the control node
+  ansible.builtin.stat:
+    path: "{{ mikrotik_configure_script }}"
+  register: mikrotik_configure_script_stat
+
+- name: Stop when the MikroTik configuration helper is missing
+  ansible.builtin.fail:
+    msg: >-
+      Missing MikroTik configuration helper script: {{ mikrotik_configure_script }}.
+      Reinstall the latest repository ZIP or restore scripts/lib/mikrotik-configure.sh.
+  when: not mikrotik_configure_script_stat.stat.exists
+
+- name: Validate MikroTik baseline template exists on the control node
+  ansible.builtin.stat:
+    path: "{{ mikrotik_config_template }}"
+  register: mikrotik_config_template_stat
+
+- name: Stop when the MikroTik baseline template is missing
+  ansible.builtin.fail:
+    msg: >-
+      Missing MikroTik baseline template: {{ mikrotik_config_template }}.
+      Reinstall the latest repository ZIP or restore the RouterOS baseline template.
+  when: not mikrotik_config_template_stat.stat.exists
+
+- name: Run homelab RouterOS 7 baseline configuration mode
+  ansible.builtin.command:
+    argv:
+      - bash
+      - "{{ mikrotik_configure_script }}"
+      - --inventory-file
+      - "{{ homelab_inventory_file }}"
+      - --password-file
+      - "{{ homelab_password_file }}"
+      - --age-key-file
+      - "{{ homelab_age_key_file }}"
+      - --recipients-file
+      - "{{ homelab_recipients_file }}"
+      - --inventory-manager
+      - "{{ homelab_inventory_manager }}"
+      - --ssh-key-file
+      - "{{ homelab_ssh_key_file }}"
+      - --config-template
+      - "{{ mikrotik_config_template }}"
+      - --mode
+      - "{{ mikrotik_config_mode | default('apply') }}"
+      - --output-dir
+      - "{{ mikrotik_output_dir }}"
+      - --remote-config-file
+      - "{{ mikrotik_remote_config_file }}"
+      - --group
+      - "{{ mikrotik_group }}"
+      - --admin-password-var
+      - "{{ mikrotik_admin_password_var }}"
+      - --backup-password-var
+      - "{{ mikrotik_backup_password_var }}"
+      - --wifi-users-passphrase-var
+      - "{{ mikrotik_wifi_users_passphrase_var }}"
+      - --wifi-mgmt-passphrase-var
+      - "{{ mikrotik_wifi_mgmt_passphrase_var }}"
+      - --wifi-iot-passphrase-var
+      - "{{ mikrotik_wifi_iot_passphrase_var }}"
+      - --wifi-guest-passphrase-var
+      - "{{ mikrotik_wifi_guest_passphrase_var }}"
+  args:
+    chdir: "{{ homelab_repo_root }}"
+  changed_when: true

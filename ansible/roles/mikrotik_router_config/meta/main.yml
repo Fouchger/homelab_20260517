@@ -1,0 +1,19 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router_config/meta/main.yml
+# Purpose:
+#   Role metadata for the homelab MikroTik RouterOS configuration role.
+# ==============================================================================
+
+galaxy_info:
+  role_name: mikrotik_router_config
+  author: homelab
+  description: Apply the homelab MikroTik RouterOS 7 baseline configuration.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+
+dependencies: []

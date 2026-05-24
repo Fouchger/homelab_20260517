@@ -1,0 +1,16 @@
+---
+# ==============================================================================
+# File: ansible/playbooks/mikrotik-configure.yml
+# Purpose:
+#   Apply the homelab RouterOS 7 baseline configuration to MikroTik inventory
+#   devices from the local control node.
+# Notes:
+#   - This playbook intentionally targets localhost because RouterOS is managed
+#     through SSH/SCP commands, not as a normal Linux Ansible host.
+# ==============================================================================
+- name: Configure MikroTik RouterOS baseline
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: mikrotik_router_config
