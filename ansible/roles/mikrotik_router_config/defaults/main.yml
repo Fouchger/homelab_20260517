@@ -1,0 +1,20 @@
+---
+# ==============================================================================
+# File: ansible/roles/mikrotik_router_config/defaults/main.yml
+# Purpose:
+#   Default variables for applying the homelab RouterOS 7 baseline configuration.
+# Notes:
+#   - Secret values are read from the existing SOPS dotenv password file by the
+#     helper script. They are not stored in this role.
+# ==============================================================================
+
+mikrotik_group: mikrotik
+mikrotik_configure_script: "{{ homelab_repo_root }}/scripts/lib/mikrotik-configure.sh"
+mikrotik_config_template: "{{ homelab_repo_root }}/ansible/roles/mikrotik_router_config/templates/router-baseline.rsc.j2"
+mikrotik_remote_config_file: homelab-router-baseline.rsc
+mikrotik_admin_password_var: MIKROTIK_ADMIN_PASSWORD
+mikrotik_backup_password_var: MIKROTIK_BACKUP_PASSWORD
+mikrotik_wifi_users_passphrase_var: MIKROTIK_WIFI_USERS_PASSPHRASE
+mikrotik_wifi_mgmt_passphrase_var: MIKROTIK_WIFI_MGMT_PASSPHRASE
+mikrotik_wifi_iot_passphrase_var: MIKROTIK_WIFI_IOT_PASSPHRASE
+mikrotik_wifi_guest_passphrase_var: MIKROTIK_WIFI_GUEST_PASSPHRASE

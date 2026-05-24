@@ -7,7 +7,7 @@ Reviewed the `homelab:setup` execution path with focus on SOPS, password-file ha
 ## Findings fixed
 
 1. The root Taskfile previously defined a repo-local SOPS key under `state/secrets/sops/keys.txt`. This conflicted with the requirement to use the default SOPS age key location.
-2. Downstream MikroTik and Technitium tasks prefixed `{{.ROOT_DIR}}/` to the SOPS key path. That is wrong once the key path is absolute/defaulted.
+2. Downstream Technitium tasks prefixed `{{.ROOT_DIR}}/` to the SOPS key path. That is wrong once the key path is absolute/defaulted.
 3. `.sops.yaml` generation was too broad and could fail when SOPS was asked to encrypt a file via stdout without a filename context.
 4. Multiple downstream scripts encrypted the same password file without `--filename-override`, making them dependent on command context rather than the single shared rule.
 

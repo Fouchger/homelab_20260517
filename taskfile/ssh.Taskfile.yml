@@ -59,9 +59,9 @@ tasks:
             Existing remote authorised_keys entries are not removed.
 
           task ssh:copy-id
-            Copy the homelab public key to every non-local inventory host where
-            passwordless SSH is not already working. Uses saved SOPS passwords
-            when available; otherwise falls back to interactive ssh-copy-id.
+            Copy the homelab public key to every non-local Linux-style inventory host where
+            passwordless SSH is not already working. MikroTik/RouterOS hosts are
+            skipped here and must use task mikrotik:bootstrap.
 
           task ssh:bootstrap
             Wait for SSH, copy keys with retries, normalise inventory auth, and
@@ -366,6 +366,11 @@ tasks:
               continue
             fi
 
+            if [[ "$group" == "mikrotik" ]]; then
+              echo "${name}: MikroTik RouterOS host, skipping generic ssh-copy-id. Run task mikrotik:bootstrap."
+              continue
+            fi
+
             if [[ -z "$host" ]]; then
               echo "${name}: WARNING: missing ansible_host; cannot copy SSH key." >&2
               pending=$((pending + 1))
@@ -526,6 +531,11 @@ tasks:
 
           if [[ "$connection" == "local" || "$name" == "local" || "$host" == "127.0.0.1" || "$host" == "localhost" ]]; then
             echo "${name}: local connection, no SSH key verification required."
+            continue
+          fi
+
+          if [[ "$group" == "mikrotik" ]]; then
+            echo "${name}: MikroTik RouterOS host, skipping generic SSH verification. Run task mikrotik:verify."
             continue
           fi
 

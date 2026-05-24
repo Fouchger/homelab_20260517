@@ -132,7 +132,7 @@ def encrypted_password_file_is_ready(password_file: Path) -> bool:
     return bool(re.search(r'^(sops_|sops:)', first_chunk, re.MULTILINE))
 
 
-def save_password_value(password_file: Path, recipients_file: Path, key: str, value: str) -> bool:
+def save_password_value(password_file: Path, recipients_file: Path, age_key_file: Path, key: str, value: str) -> bool:
     if not value:
         return False
     if not looks_like_env_var(key):
@@ -143,6 +143,10 @@ def save_password_value(password_file: Path, recipients_file: Path, key: str, va
         return False
     if not recipients_file.is_file():
         print(f'WARNING: Missing SOPS recipient file: {recipients_file}', file=sys.stderr)
+        print('         The inventory will reference the variable only. No password file was created.', file=sys.stderr)
+        return False
+    if not age_key_file.is_file():
+        print(f'WARNING: Missing SOPS age key file: {age_key_file}', file=sys.stderr)
         print('         The inventory will reference the variable only. No password file was created.', file=sys.stderr)
         return False
     if not command_exists('sops'):
@@ -162,12 +166,15 @@ def save_password_value(password_file: Path, recipients_file: Path, key: str, va
     encrypted_path = Path(encrypted_name)
 
     try:
+        sops_env = dict(os.environ)
+        sops_env['SOPS_AGE_KEY_FILE'] = str(age_key_file)
         decrypt = subprocess.run(
             ['sops', '--decrypt', '--input-type', 'dotenv', '--output-type', 'dotenv', str(password_file)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=False,
+            env=sops_env,
         )
         if decrypt.returncode != 0:
             print('WARNING: Unable to decrypt the encrypted password file. The inventory will reference the variable only.', file=sys.stderr)
@@ -180,11 +187,12 @@ def save_password_value(password_file: Path, recipients_file: Path, key: str, va
 
         with encrypted_path.open('w', encoding='utf-8') as output_handle:
             encrypt = subprocess.run(
-                ['sops', '--encrypt', '--age', recipient, '--input-type', 'dotenv', '--output-type', 'dotenv', str(runtime_path)],
+                ['sops', '--encrypt', '--age', recipient, '--filename-override', str(password_file), '--input-type', 'dotenv', '--output-type', 'dotenv', str(runtime_path)],
                 stdout=output_handle,
                 stderr=subprocess.PIPE,
                 text=True,
                 check=False,
+                env=sops_env,
             )
         if encrypt.returncode != 0:
             print('WARNING: Unable to update the encrypted password file. The inventory will reference the variable only.', file=sys.stderr)
@@ -393,6 +401,7 @@ def add_servers(args: argparse.Namespace, interactive: bool) -> None:
     inventory_file = Path(args.inventory_file)
     password_file = Path(args.password_file)
     recipients_file = Path(args.recipients_file)
+    age_key_file = Path(getattr(args, 'age_key_file', '') or os.environ.get('SOPS_AGE_KEY_FILE', ''))
 
     if interactive:
         tty = terminal()
@@ -427,7 +436,7 @@ def add_servers(args: argparse.Namespace, interactive: bool) -> None:
         first_mac_address = args.mac_address or ''
         ssh_user = args.ssh_user
         first_ssh_password_var = '' if args.no_password_var else (args.ssh_password_var or env_var_from_hostname(first_hostname))
-        first_ssh_password_value = ''
+        first_ssh_password_value = os.environ.get(args.ssh_password_value_env, '') if args.ssh_password_value_env else ''
         python_interpreter = args.python_interpreter or 'auto_silent'
         ssh_port = args.ssh_port or '22'
         check_network = False
@@ -485,10 +494,16 @@ def add_servers(args: argparse.Namespace, interactive: bool) -> None:
             server['homelab_vm_lxc_id'] = vm_lxc_id
         if mac_address:
             server['homelab_mac_address'] = mac_address
+        if getattr(args, 'device_type', ''):
+            server['homelab_device_type'] = args.device_type
+        if getattr(args, 'automation_user', ''):
+            server['homelab_automation_user'] = args.automation_user
         password_saved = False
         if ssh_password_var:
-            if interactive and first_ssh_password_value and offset == 0:
-                password_saved = save_password_value(password_file, recipients_file, ssh_password_var, first_ssh_password_value)
+            if first_ssh_password_value and offset == 0:
+                password_saved = save_password_value(password_file, recipients_file, age_key_file, ssh_password_var, first_ssh_password_value)
+                if not password_saved and getattr(args, 'require_password_save', False):
+                    raise SystemExit('ERROR: Password value was entered but could not be saved to the encrypted password file. Run: task passwords:setup, then retry task mikrotik:inventory:add.')
             server['ansible_password'] = "{{ lookup('env', '" + ssh_password_var + "') }}"
             server['homelab_ssh_password_var'] = ssh_password_var
 
@@ -523,7 +538,7 @@ def add_servers(args: argparse.Namespace, interactive: bool) -> None:
     for status, hostname, detail in report:
         print(f'{status:7} {hostname:30} {detail}')
     print(f'\nInventory file: {inventory_file}')
-    print(f'Password file: {password_file} (updated only when it already exists and SOPS is ready)')
+    print(f'Password file: {password_file} (updated through SOPS when a password value is supplied)')
     print(f'Servers requested: {server_count}; changed: {added}; skipped: {server_count - added}')
 
 
@@ -610,10 +625,13 @@ def normalise_auth(args: argparse.Namespace) -> None:
     report: list[tuple[str, str, str]] = []
 
     for host_name, values in root_hosts.items():
-        ok, detail = key_auth_works(values, key_file)
         if values.get('ansible_connection') == 'local':
             report.append(('SKIPPED', host_name, 'local connection'))
             continue
+        if values.get('homelab_device_type') == 'mikrotik':
+            report.append(('SKIPPED', host_name, 'MikroTik RouterOS uses task mikrotik:bootstrap'))
+            continue
+        ok, detail = key_auth_works(values, key_file)
         if ok:
             values['ansible_ssh_private_key_file'] = key_file
             if 'ansible_password' in values:
@@ -625,10 +643,13 @@ def normalise_auth(args: argparse.Namespace) -> None:
 
     for group_name, group_hosts in groups.items():
         for host_name, values in group_hosts.items():
-            ok, detail = key_auth_works(values, key_file)
             if values.get('ansible_connection') == 'local':
                 report.append(('SKIPPED', host_name, 'local connection'))
                 continue
+            if group_name == 'mikrotik' or values.get('homelab_device_type') == 'mikrotik':
+                report.append(('SKIPPED', host_name, f'group={group_name}; MikroTik RouterOS uses task mikrotik:bootstrap'))
+                continue
+            ok, detail = key_auth_works(values, key_file)
             if ok:
                 values['ansible_ssh_private_key_file'] = key_file
                 if 'ansible_password' in values:
@@ -661,6 +682,7 @@ def main() -> int:
     add_parser.add_argument('--inventory-file', required=True)
     add_parser.add_argument('--password-file', required=True)
     add_parser.add_argument('--recipients-file', required=True)
+    add_parser.add_argument('--age-key-file', default='')
     add_parser.add_argument('--group', required=True)
     add_parser.add_argument('--hostname', required=True)
     add_parser.add_argument('--ansible-host', default='')
@@ -668,9 +690,13 @@ def main() -> int:
     add_parser.add_argument('--vm-lxc-id', default='')
     add_parser.add_argument('--mac-address', default='')
     add_parser.add_argument('--ssh-password-var', default='')
+    add_parser.add_argument('--ssh-password-value-env', default='')
     add_parser.add_argument('--no-password-var', action='store_true')
+    add_parser.add_argument('--device-type', default='')
+    add_parser.add_argument('--automation-user', default='')
     add_parser.add_argument('--python-interpreter', default='auto_silent')
     add_parser.add_argument('--ssh-port', default='22')
+    add_parser.add_argument('--require-password-save', action='store_true')
 
     normalise_parser = subparsers.add_parser('normalise-auth')
     normalise_parser.add_argument('--inventory-file', required=True)

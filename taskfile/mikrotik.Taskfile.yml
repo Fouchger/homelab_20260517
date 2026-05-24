@@ -3,15 +3,34 @@
 # ==============================================================================
 # File: taskfile/mikrotik.Taskfile.yml
 # Purpose:
-#   Staged MikroTik RouterOS setup, backup, automation bootstrap, baseline apply,
-#   and validation tasks for the homelab control plane.
+#   Capture MikroTik RouterOS inventory details and bootstrap the SSH automation
+#   user from scratch.
 # Notes:
-#   - The first run asks for the current MikroTik admin password and stores it in
-#     the encrypted SOPS password file.
-#   - Backups include sensitive exports by design and are stored under state/.
+#   - This is intentionally independent from the generic Linux ssh-copy-id flow.
+#   - RouterOS uses /user ssh-keys rather than ~/.ssh/authorized_keys.
+#   - The bootstrap SSH user/password is used only to create the automation user
+#     and attach the homelab public SSH key.
 # ==============================================================================
 
 version: '3'
+
+vars:
+  MIKROTIK_GROUP: '{{.MIKROTIK_GROUP | default "mikrotik"}}'
+  MIKROTIK_AUTOMATION_USER: '{{.MIKROTIK_AUTOMATION_USER | default "homelab"}}'
+  MIKROTIK_BOOTSTRAP_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-bootstrap.sh'
+  MIKROTIK_BACKUP_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-backup.sh'
+  MIKROTIK_BACKUP_PLAYBOOK: 'ansible/playbooks/mikrotik-backup.yml'
+  MIKROTIK_CONFIGURE_PLAYBOOK: 'ansible/playbooks/mikrotik-configure.yml'
+  MIKROTIK_CONFIG_SECRETS_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-config-secrets.sh'
+  MIKROTIK_REVIEW_SCRIPT: '{{.SCRIPT_LIB_DIR}}/mikrotik-review.sh'
+  MIKROTIK_BACKUP_DIR: '{{.BACKUP_DIR}}/mikrotik'
+  MIKROTIK_CONFIG_OUTPUT_DIR: '{{.BACKUP_DIR}}/mikrotik/generated'
+  MIKROTIK_BACKUP_PASSWORD_VAR: '{{.MIKROTIK_BACKUP_PASSWORD_VAR | default "MIKROTIK_BACKUP_PASSWORD"}}'
+  MIKROTIK_ADMIN_PASSWORD_VAR: '{{.MIKROTIK_ADMIN_PASSWORD_VAR | default "MIKROTIK_ADMIN_PASSWORD"}}'
+  MIKROTIK_WIFI_USERS_PASSPHRASE_VAR: '{{.MIKROTIK_WIFI_USERS_PASSPHRASE_VAR | default "MIKROTIK_WIFI_USERS_PASSPHRASE"}}'
+  MIKROTIK_WIFI_MGMT_PASSPHRASE_VAR: '{{.MIKROTIK_WIFI_MGMT_PASSPHRASE_VAR | default "MIKROTIK_WIFI_MGMT_PASSPHRASE"}}'
+  MIKROTIK_WIFI_IOT_PASSPHRASE_VAR: '{{.MIKROTIK_WIFI_IOT_PASSPHRASE_VAR | default "MIKROTIK_WIFI_IOT_PASSPHRASE"}}'
+  MIKROTIK_WIFI_GUEST_PASSPHRASE_VAR: '{{.MIKROTIK_WIFI_GUEST_PASSPHRASE_VAR | default "MIKROTIK_WIFI_GUEST_PASSPHRASE"}}'
 
 tasks:
   default:
@@ -20,105 +39,456 @@ tasks:
       - task: tasklist
 
   tasklist:
-    desc: Show MikroTik tasks
+    desc: Show the available MikroTik tasks
     cmds:
       - task --taskfile "{{.TASKFILE}}" --list
 
   help:
-    desc: Show MikroTik task help
+    desc: Show MikroTik onboarding tasks
     cmds:
       - |
         set -euo pipefail
+
         cat <<'EOHELP'
         MikroTik task help
 
-        Routine flow
+        Setup
           task mikrotik:setup
-            Ask once for the current admin password, save secrets in SOPS,
-            back up the current router including sensitive values, render the
-            staged baseline, upload it, import it, and validate access.
+            Ask for RouterOS inventory details, create/update inventory.yml,
+            create the RouterOS automation user, install the homelab SSH public
+            key, and test key-based SSH as the new user.
+
+          task mikrotik:inventory:add
+            Ask for one MikroTik router and add it to state/ansible/inventory.yml
+            using the initial RouterOS SSH user. The bootstrap password is saved
+            to the standard SOPS encrypted password file before bootstrap runs.
+
+          task mikrotik:bootstrap
+            Use SCP to copy the homelab public SSH key to RouterOS 7, then use
+            SSH to create/update the automation user, import the key, test the
+            new user's SSH login, and switch inventory to the automation user.
+
+          task mikrotik:verify
+            Test key-based SSH to routers in the mikrotik inventory group.
 
           task mikrotik:backup
-            Create and download a sensitive export and encrypted binary backup.
+            Create a sensitive RouterOS text export and encrypted binary backup
+            for each MikroTik router. Backups are stored below
+            state/backups/mikrotik/<timestamp>/. The backup encryption password
+            is stored in SOPS as MIKROTIK_BACKUP_PASSWORD.
+
+          task mikrotik:secrets:ensure
+            Prompt for any missing RouterOS configuration secrets and save them
+            to the standard SOPS encrypted password file.
+
+          task mikrotik:render
+            Render a sensitive RouterOS install script and a redacted review copy
+            without connecting to the router.
+
+          task mikrotik:plan
+            Render the desired RouterOS baseline from the managed export-style
+            template, compare it to the latest backup export, and create
+            sensitive plus redacted diffs.
+
+          task mikrotik:review
+            Compare the latest router backup export with the latest proposed
+            redacted baseline, open vimdiff for review, and ask whether to
+            apply and verify the change.
+
+          task mikrotik:apply
+            Back up the router, render and diff the desired RouterOS baseline,
+            then require explicit confirmation before importing the config.
 
           task mikrotik:configure
-            Render and apply the staged RouterOS baseline.
-
-          task mikrotik:validate
-            Validate SSH/API reachability and core RouterOS state.
-
-        Credential rotation
-          MIKROTIK_CREDENTIALS_FORCE=1 task mikrotik:credentials
-            Re-enter the current admin password and rotate generated automation
-            values in the encrypted password file.
+            Alias for mikrotik:apply.
         EOHELP
 
   setup:
-    desc: Back up and configure MikroTik RouterOS for the homelab automatically.
+    desc: Capture MikroTik inventory, bootstrap automation user, and verify SSH.
     cmds:
-      - task: credentials
-      - task: backup
-      - task: configure
-      - task: validate
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Capture MikroTik inventory, bootstrap automation user, and verify SSH." "GREEN"
+      - task: :ssh:install
+      - task: :passwords:encrypt
+      - task: :ssh:key:ensure
+      - task: inventory:add
+      - task: bootstrap
+      - task: verify
 
-  credentials:
-    desc: Ensure MikroTik credentials exist in the encrypted password file.
+  inventory:add:
+    desc: Ask for one MikroTik router and add it to the SSH inventory.
+    deps:
+      - :env_create:inventory:init
+      - :passwords:encrypt
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Add MikroTik RouterOS SSH inventory details." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        password_file="{{.PASSWORDS_ENCRYPTED_FILE}}"
+        inventory_dir="{{.ANSIBLE_DIR}}"
+        group="{{.MIKROTIK_GROUP}}"
+        automation_user="{{.MIKROTIK_AUTOMATION_USER}}"
+
+        prompt_default() {
+          local label="$1"
+          local default_value="$2"
+          local value=""
+          printf '%s [%s]: ' "$label" "$default_value" > /dev/tty
+          IFS= read -r value < /dev/tty
+          printf '%s' "${value:-$default_value}"
+        }
+
+        prompt_required() {
+          local label="$1"
+          local value=""
+          while [[ -z "$value" ]]; do
+            printf '%s: ' "$label" > /dev/tty
+            IFS= read -r value < /dev/tty
+          done
+          printf '%s' "$value"
+        }
+
+        prompt_secret() {
+          local label="$1"
+          local value=""
+          printf '%s: ' "$label" > /dev/tty
+          stty -echo < /dev/tty || true
+          IFS= read -r value < /dev/tty
+          stty echo < /dev/tty || true
+          printf '\n' > /dev/tty
+          printf '%s' "$value"
+        }
+
+        env_var_from_hostname() {
+          local hostname="$1"
+          printf '%s_MIKROTIK_SSH_PASSWORD' "$hostname" | tr '[:lower:].-' '[:upper:]__' | sed -E 's/[^A-Z0-9_]/_/g; s/^([0-9])/_\1/'
+        }
+
+        mkdir -p "$inventory_dir"
+
+        hostname="$(prompt_required 'MikroTik inventory hostname')"
+        ansible_host="$(prompt_required 'MikroTik SSH IP address / DNS name')"
+        ssh_port="$(prompt_default 'MikroTik SSH port' '22')"
+        bootstrap_user="$(prompt_default 'Initial MikroTik SSH username' 'admin')"
+        echo "Automation username to create: ${automation_user}"
+        default_password_var="$(env_var_from_hostname "$hostname")"
+        ssh_password_var="$(prompt_default 'Bootstrap SSH password variable name in encrypted password file' "$default_password_var")"
+        bootstrap_password="$(prompt_secret "Bootstrap SSH password value for ${ssh_password_var} (blank to only reference existing variable)")"
+
+        if [[ -n "$ssh_password_var" && ! -f "$password_file" ]]; then
+          echo "ERROR: ${password_file} does not exist. Run: task passwords:setup" >&2
+          exit 1
+        fi
+
+        if [[ -n "$bootstrap_password" ]]; then
+          export MIKROTIK_BOOTSTRAP_PASSWORD_VALUE="$bootstrap_password"
+          password_value_env="MIKROTIK_BOOTSTRAP_PASSWORD_VALUE"
+        else
+          password_value_env=""
+        fi
+
+        python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" add-server \
+          --inventory-file "$inventory_file" \
+          --password-file "$password_file" \
+          --recipients-file "{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          --age-key-file "{{.SOPS_AGE_KEY_FILE}}" \
+          --group "$group" \
+          --hostname "$hostname" \
+          --ansible-host "$ansible_host" \
+          --ssh-user "$bootstrap_user" \
+          --ssh-password-var "$ssh_password_var" \
+          --ssh-password-value-env "$password_value_env" \
+          --device-type mikrotik \
+          --automation-user "$automation_user" \
+          --python-interpreter auto_silent \
+          --ssh-port "$ssh_port" \
+          --require-password-save
+
+  bootstrap:
+    desc: Create/update the RouterOS automation user, install SSH key, and switch inventory to key auth.
     deps:
       - :passwords:encrypt
     cmds:
       - |
         set -euo pipefail
-        ROOT_DIR='{{.ROOT_DIR}}' \
-          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' \
-          SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
-          '{{.ROOT_DIR}}/scripts/lib/mikrotik-credentials.sh'
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Bootstrap MikroTik RouterOS automation user." "PEACH"
+      - |
+        set -euo pipefail
+
+        bash "{{.MIKROTIK_BOOTSTRAP_SCRIPT}}" \
+          --inventory-file "{{.ANSIBLE_INVENTORY_FILE}}" \
+          --password-file "{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          --age-key-file "{{.SOPS_AGE_KEY_FILE}}" \
+          --recipients-file "{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          --inventory-manager "{{.INVENTORY_MANAGER_SCRIPT}}" \
+          --ssh-key-file "${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" \
+          --group "{{.MIKROTIK_GROUP}}" \
+          --automation-user "{{.MIKROTIK_AUTOMATION_USER}}"
 
   backup:
-    desc: Create and download sensitive MikroTik export and binary backup.
+    desc: Create sensitive RouterOS text exports and encrypted binary backups.
     deps:
-      - credentials
+      - :passwords:encrypt
+      - :ssh:key:ensure
     cmds:
       - |
         set -euo pipefail
-        ROOT_DIR='{{.ROOT_DIR}}' \
-          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' \
-          '{{.ROOT_DIR}}/scripts/lib/mikrotik-backup.sh'
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Back up MikroTik RouterOS with sensitive configuration." "PEACH"
+      - |
+        set -euo pipefail
+
+        backup_script="{{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_SCRIPT}}"
+        if [[ ! -f "$backup_script" ]]; then
+          echo "ERROR: Missing MikroTik backup script: $backup_script" >&2
+          echo "       Reinstall the latest repo ZIP or restore scripts/lib/mikrotik-backup.sh." >&2
+          exit 1
+        fi
+
+        ansible-playbook "{{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_PLAYBOOK}}" \
+          -i localhost, \
+          -c local \
+          -e "ansible_python_interpreter=/usr/bin/python3" \
+          -e "homelab_repo_root={{.ROOT_DIR}}" \
+          -e "homelab_inventory_file={{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}" \
+          -e "homelab_password_file={{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          -e "homelab_age_key_file={{.SOPS_AGE_KEY_FILE}}" \
+          -e "homelab_recipients_file={{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          -e "homelab_inventory_manager={{.ROOT_DIR}}/{{.INVENTORY_MANAGER_SCRIPT}}" \
+          -e "homelab_ssh_key_file=${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" \
+          -e "mikrotik_backup_script=$backup_script" \
+          -e "mikrotik_backup_dir={{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_DIR}}" \
+          -e "mikrotik_group={{.MIKROTIK_GROUP}}" \
+          -e "mikrotik_backup_password_var={{.MIKROTIK_BACKUP_PASSWORD_VAR}}"
+
+
+
+  secrets:ensure:
+    desc: Prompt for missing MikroTik RouterOS configuration secrets and save them to SOPS.
+    deps:
+      - :passwords:encrypt
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Ensure MikroTik RouterOS configuration secrets." "PEACH"
+      - |
+        set -euo pipefail
+
+        secrets_script="{{.ROOT_DIR}}/{{.MIKROTIK_CONFIG_SECRETS_SCRIPT}}"
+        if [[ ! -f "$secrets_script" ]]; then
+          echo "ERROR: Missing MikroTik config secrets script: $secrets_script" >&2
+          echo "       Reinstall the latest repo ZIP or restore scripts/lib/mikrotik-config-secrets.sh." >&2
+          exit 1
+        fi
+
+        bash "$secrets_script" \
+          --password-file "{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          --age-key-file "{{.SOPS_AGE_KEY_FILE}}" \
+          --recipients-file "{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          --admin-password-var "{{.MIKROTIK_ADMIN_PASSWORD_VAR}}" \
+          --backup-password-var "{{.MIKROTIK_BACKUP_PASSWORD_VAR}}" \
+          --wifi-users-passphrase-var "{{.MIKROTIK_WIFI_USERS_PASSPHRASE_VAR}}" \
+          --wifi-mgmt-passphrase-var "{{.MIKROTIK_WIFI_MGMT_PASSPHRASE_VAR}}" \
+          --wifi-iot-passphrase-var "{{.MIKROTIK_WIFI_IOT_PASSPHRASE_VAR}}" \
+          --wifi-guest-passphrase-var "{{.MIKROTIK_WIFI_GUEST_PASSPHRASE_VAR}}"
 
   render:
-    desc: Render the staged MikroTik RouterOS baseline script.
+    desc: Render the MikroTik RouterOS baseline and redacted review artefacts only.
     deps:
-      - credentials
+      - :passwords:encrypt
+      - :ssh:key:ensure
+    cmds:
+      - task: secrets:ensure
+      - task: configure:run
+        vars:
+          MIKROTIK_CONFIG_MODE: render
+
+  plan:
+    desc: Render the MikroTik RouterOS baseline and diff it against the latest local backup export.
+    deps:
+      - :passwords:encrypt
+      - :ssh:key:ensure
+    cmds:
+      - task: secrets:ensure
+      - task: configure:run
+        vars:
+          MIKROTIK_CONFIG_MODE: plan
+
+  review:
+    desc: Open vimdiff for latest backup versus proposed MikroTik config, then optionally apply and verify.
+    deps:
+      - :passwords:encrypt
+      - :ssh:key:ensure
     cmds:
       - |
         set -euo pipefail
-        ROOT_DIR='{{.ROOT_DIR}}' \
-          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' \
-          '{{.ROOT_DIR}}/scripts/lib/mikrotik-render-baseline.sh'
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Review MikroTik backup versus proposed configuration." "PEACH"
+
+        review_script="{{.ROOT_DIR}}/{{.MIKROTIK_REVIEW_SCRIPT}}"
+        if [[ ! -f "$review_script" ]]; then
+          echo "ERROR: Missing MikroTik review script: $review_script" >&2
+          echo "       Reinstall the latest repo ZIP or restore scripts/lib/mikrotik-review.sh." >&2
+          exit 1
+        fi
+
+        approval_file="{{.ROOT_DIR}}/{{.MIKROTIK_CONFIG_OUTPUT_DIR}}/.last-review-approved"
+        rm -f "$approval_file"
+
+        set +e
+        bash "$review_script" \
+          --backup-dir "{{.ROOT_DIR}}/{{.MIKROTIK_BACKUP_DIR}}" \
+          --generated-dir "{{.ROOT_DIR}}/{{.MIKROTIK_CONFIG_OUTPUT_DIR}}" \
+          --approval-file "$approval_file" \
+          --vimdiff
+        review_rc=$?
+        set -e
+
+        if [[ "$review_rc" -eq 20 ]]; then
+          echo "MikroTik review completed. Apply was not approved."
+          exit 0
+        fi
+        if [[ "$review_rc" -ne 0 ]]; then
+          exit "$review_rc"
+        fi
+        if [[ ! -f "$approval_file" ]]; then
+          echo "ERROR: approval marker was not created; refusing to apply." >&2
+          exit 1
+        fi
+
+        echo "MikroTik review approved. Applying proposed configuration and verifying SSH."
+        MIKROTIK_APPLY_CONFIRM=APPLY_ALL task mikrotik:apply
+        task mikrotik:verify
+
+  approve:
+    desc: Alias for mikrotik:review.
+    cmds:
+      - task: review
+
+  apply:
+    desc: Back up, plan, confirm, then apply the homelab RouterOS 7 baseline configuration.
+    deps:
+      - :passwords:encrypt
+      - :ssh:key:ensure
+    cmds:
+      - task: secrets:ensure
+      - task: backup
+      - |
+        set -euo pipefail
+        if [[ "${MIKROTIK_APPLY_CONFIRM:-}" != "APPLY_ALL" ]]; then
+          printf 'This will import the managed RouterOS baseline on MikroTik inventory hosts. Type APPLY to continue: ' > /dev/tty
+          IFS= read -r confirmation < /dev/tty
+          if [[ "$confirmation" != "APPLY" ]]; then
+            echo "MikroTik apply cancelled." >&2
+            exit 1
+          fi
+        fi
+      - task: configure:run
+        vars:
+          MIKROTIK_CONFIG_MODE: apply
 
   configure:
-    desc: Upload and import the staged MikroTik RouterOS baseline script.
-    deps:
-      - render
+    desc: Alias for mikrotik:apply.
     cmds:
-      - |
-        set -euo pipefail
-        ROOT_DIR='{{.ROOT_DIR}}' \
-          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' \
-          SOPS_AGE_RECIPIENTS_FILE='{{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}' \
-          '{{.ROOT_DIR}}/scripts/lib/mikrotik-apply-baseline.sh'
+      - task: apply
 
-  validate:
-    desc: Validate MikroTik SSH/API access and core DNS/DHCP settings.
-    deps:
-      - credentials
+  configure:run:
+    internal: true
+    desc: Run the local Ansible wrapper for MikroTik render, plan, or apply mode.
     cmds:
       - |
         set -euo pipefail
-        ROOT_DIR='{{.ROOT_DIR}}' \
-          PASSWORDS_ENCRYPTED_FILE='{{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}' \
-          SOPS_AGE_KEY_FILE='{{.SOPS_AGE_KEY_FILE}}' \
-          '{{.ROOT_DIR}}/scripts/lib/mikrotik-validate.sh'
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "MikroTik RouterOS baseline {{.MIKROTIK_CONFIG_MODE}}." "PEACH"
+      - |
+        set -euo pipefail
+
+        export ANSIBLE_ROLES_PATH="{{.ROOT_DIR}}/ansible/roles:${ANSIBLE_ROLES_PATH:-}"
+        export ANSIBLE_CONFIG="{{.ROOT_DIR}}/ansible.cfg"
+
+        output_dir="{{.ROOT_DIR}}/{{.MIKROTIK_CONFIG_OUTPUT_DIR}}/$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$output_dir"
+        chmod 700 "$output_dir"
+
+        ansible-playbook "{{.ROOT_DIR}}/{{.MIKROTIK_CONFIGURE_PLAYBOOK}}" \
+          -i localhost, \
+          -c local \
+          -e "ansible_python_interpreter=/usr/bin/python3" \
+          -e "homelab_repo_root={{.ROOT_DIR}}" \
+          -e "homelab_inventory_file={{.ROOT_DIR}}/{{.ANSIBLE_INVENTORY_FILE}}" \
+          -e "homelab_password_file={{.ROOT_DIR}}/{{.PASSWORDS_ENCRYPTED_FILE}}" \
+          -e "homelab_age_key_file={{.SOPS_AGE_KEY_FILE}}" \
+          -e "homelab_recipients_file={{.ROOT_DIR}}/{{.SOPS_AGE_RECIPIENTS_FILE}}" \
+          -e "homelab_inventory_manager={{.ROOT_DIR}}/{{.INVENTORY_MANAGER_SCRIPT}}" \
+          -e "homelab_ssh_key_file=${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}" \
+          -e "mikrotik_group={{.MIKROTIK_GROUP}}" \
+          -e "mikrotik_config_mode={{.MIKROTIK_CONFIG_MODE}}" \
+          -e "mikrotik_output_dir=$output_dir" \
+          -e "mikrotik_admin_password_var={{.MIKROTIK_ADMIN_PASSWORD_VAR}}" \
+          -e "mikrotik_backup_password_var={{.MIKROTIK_BACKUP_PASSWORD_VAR}}" \
+          -e "mikrotik_wifi_users_passphrase_var={{.MIKROTIK_WIFI_USERS_PASSPHRASE_VAR}}" \
+          -e "mikrotik_wifi_mgmt_passphrase_var={{.MIKROTIK_WIFI_MGMT_PASSPHRASE_VAR}}" \
+          -e "mikrotik_wifi_iot_passphrase_var={{.MIKROTIK_WIFI_IOT_PASSPHRASE_VAR}}" \
+          -e "mikrotik_wifi_guest_passphrase_var={{.MIKROTIK_WIFI_GUEST_PASSPHRASE_VAR}}"
+
+  verify:
+    desc: Test key-based SSH to MikroTik routers in the mikrotik inventory group.
+    cmds:
+      - |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        source "${ROOT_DIR}/{{.TERMINAL_COLOURS_SCRIPT}}"
+        print_section_header "Verify MikroTik key-based SSH." "PEACH"
+      - |
+        set -euo pipefail
+
+        inventory_file="{{.ANSIBLE_INVENTORY_FILE}}"
+        key_file="${HOMELAB_SSH_KEY_FILE:-{{.SSH_KEY_FILE}}}"
+        group="{{.MIKROTIK_GROUP}}"
+        failures=0
+        checked=0
+
+        [[ -f "$inventory_file" ]] || { echo "ERROR: Missing inventory file: $inventory_file" >&2; exit 1; }
+        [[ -f "$key_file" ]] || { echo "ERROR: Missing SSH key file: $key_file" >&2; exit 1; }
+
+        while IFS='|' read -r name host_group host user connection port keyfile password_var; do
+          [[ -n "$name" ]] || continue
+          [[ "$host_group" == "$group" ]] || continue
+          [[ "$connection" != "local" ]] || continue
+          checked=$((checked + 1))
+          target="${user}@${host}"
+          if ssh -n -i "$key_file" -p "$port" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$target" '/system identity print' >/dev/null; then
+            echo "${name}: key-based SSH verified for ${target}."
+          else
+            echo "ERROR: ${name}: key-based SSH failed for ${target}." >&2
+            failures=$((failures + 1))
+          fi
+        done < <(python3 -S "{{.INVENTORY_MANAGER_SCRIPT}}" list-ssh-hosts --inventory-file "$inventory_file")
+
+        if (( checked == 0 )); then
+          echo "No MikroTik routers found in inventory group ${group}."
+          exit 0
+        fi
+
+        if (( failures > 0 )); then
+          echo "ERROR: ${failures} MikroTik router(s) failed SSH verification." >&2
+          exit 1
+        fi
+
+        echo "MikroTik key-based SSH verified for ${checked} router(s)."

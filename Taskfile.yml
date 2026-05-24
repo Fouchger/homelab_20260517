@@ -84,9 +84,6 @@ vars:
   TECHNITIUM_ANSIBLE_DIR: ansible
   TECHNITIUM_ANSIBLE_PLAYBOOK: '{{.TECHNITIUM_ANSIBLE_DIR}}/playbooks/technitium.yml'
 
-  # MikroTik RouterOS automation paths
-  MIKROTIK_GENERATED_DIR: '{{.STATE_DIR}}/generated/routeros'
-  MIKROTIK_BACKUP_DIR: '{{.BACKUP_DIR}}/mikrotik'
 includes:
   passwords: ./taskfile/passwords.Taskfile.yml
   github: ./taskfile/github.Taskfile.yml
@@ -179,6 +176,27 @@ tasks:
         task apps:packer                -> Install Packer from the official HashiCorp apt repository.
         task apps:audit                 -> Show installed application and automation tooling status.
 
+
+        --------------------------------------------------------------
+        MikroTik RouterOS onboarding
+        --------------------------------------------------------------
+        task mikrotik:help             -> Show MikroTik onboarding task help.
+        task mikrotik:setup            -> Ask for RouterOS inventory details, create/update inventory.yml,
+                                            create the automation SSH user, install the homelab public key,
+                                            and verify key-based SSH to the router.
+        task mikrotik:inventory:add    -> Add one MikroTik router using the initial RouterOS SSH user.
+        task mikrotik:bootstrap        -> Create/update the RouterOS automation user and switch inventory
+                                            to key-based SSH.
+        task mikrotik:verify           -> Test key-based SSH for MikroTik routers.
+        task mikrotik:backup           -> Create sensitive RouterOS exports and encrypted binary backups
+                                            under state/backups/mikrotik/<timestamp>/.
+        task mikrotik:secrets:ensure   -> Prompt for missing RouterOS configuration secrets and save them to SOPS.
+        task mikrotik:render           -> Render sensitive and redacted RouterOS baseline artefacts locally.
+        task mikrotik:plan             -> Render, export the live router config, and create redacted/sensitive diffs.
+        task mikrotik:review           -> Compare latest backup to proposed config, then optionally apply and verify.
+        task mikrotik:apply            -> Back up, plan, confirm, and import the RouterOS 7 baseline.
+        task mikrotik:configure        -> Alias for mikrotik:apply.
+
         --------------------------------------------------------------
         Health and capability reporting
         --------------------------------------------------------------
@@ -244,14 +262,6 @@ tasks:
         task proxmox:api:report         -> Show Proxmox API bootstrap status without printing secrets.
 
         --------------------------------------------------------------
-        MikroTik RouterOS
-        --------------------------------------------------------------
-        task mikrotik:setup             -> Ask once for the current admin password, create sensitive backups,
-                                            configure router automation, apply the staged baseline, and validate.
-        task mikrotik:backup            -> Create a sensitive RouterOS export and encrypted binary backup.
-        task mikrotik:configure         -> Render, upload, and import the staged RouterOS baseline.
-
-        --------------------------------------------------------------
         Proxmox helper scripts
         --------------------------------------------------------------
         task proxmox_scripts:code-server:install -> Install code-server using the reviewed static repo script.
@@ -272,6 +282,7 @@ tasks:
       - task: homelab:bootstrap
       - task: homelab:configure
       - task: homelab:validate
+      - task: homelab:mikrotik
       - task: homelab:lxc_creation
 
   homelab:bootstrap:
@@ -292,9 +303,8 @@ tasks:
       - task: ssh:key:ensure
 
   homelab:configure:
-    desc: Configure MikroTik, capture Proxmox host configuration, bootstrap SSH access, and prepare automation accounts.
+    desc: Capture Proxmox host configuration, bootstrap SSH access, and prepare automation accounts.
     cmds:
-      - task: mikrotik:setup
       - task: proxmox:api:ensure
 
   homelab:validate:
@@ -321,6 +331,14 @@ tasks:
     cmds:
       - task: proxmox_scripts:technitiumdns:ensure
     
+  homelab:mikrotik:
+    desc: mikrotik setup
+    cmds:
+      - task: mikrotik:bootstrap
+      - task: mikrotik:verify
+      - task: mikrotik:backup
+      - task: mikrotik:plan
+      - task: mikrotik:review
 
   ci:
     desc: Run safe static validation checks for shell, Python, and YAML files.

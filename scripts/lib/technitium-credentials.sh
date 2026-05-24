@@ -7,9 +7,7 @@
 # Notes:
 #   - This script does not write plaintext credentials into the repository.
 #   - Existing values are preserved by default to keep setup idempotent.
-#   - DHCP sync API tokens are created by technitium-api-token.sh after the
-#     Technitium API is reachable; they are not requested from the operator.
-# ==============================================================================
+# # ==============================================================================
 
 set -euo pipefail
 
